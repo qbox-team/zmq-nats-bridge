@@ -15,5 +15,5 @@ config = { version = "0.15.0", features = ["toml"] }
 clap = { version = "4.5.9", features = ["derive"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-thiserror = "1.0.63"
+thiserror = "2.0.12"
 humantime = "2.1"
