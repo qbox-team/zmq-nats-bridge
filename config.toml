@@ -1,0 +1,54 @@
+# Example configuration for zmq-nats-bridge
+
+# Global ZMQ settings
+[zmq]
+# If no message is received within heartbeat * 2, log a warning.
+# Publisher should send data frequently enough or implement its own keepalives.
+# Value uses humantime format (e.g., "5s", "1m")
+heartbeat = "5s"
+
+# Global NATS settings (optional credentials)
+[nats]
+# user = "my_user"
+# password = "my_password"
+
+# Define one or more forwarding mappings
+[forward_mappings]
+
+# Forward Ticks from ZMQ 1402 to NATS
+[[mapping]]
+# Optional name for easier logging/identification
+name = "FuturesTicks"
+# List of ZMQ PUB endpoints to connect to (SUB socket)
+zmq_endpoints = ["tcp://192.168.6.7:1402"]
+# List of ZMQ topics to subscribe to
+zmq_topics    = ["data/api/Tick"]
+# NATS server URI for this mapping
+nats_uri      = "nats://localhost:4222"
+# Target NATS subject to publish messages to
+nats_subject  = "market_data.FUT_CN.tick"
+
+# Forward Bars from ZMQ 1422 to NATS
+[[mapping]]
+name = "FuturesBars1m"
+zmq_endpoints = ["tcp://192.168.6.7:1422"]
+zmq_topics    = ["data/api/Bar"]
+nats_uri      = "nats://localhost:4222"
+nats_subject  = "market_data.FUT_CN.bar.1m"
+
+# Forward Ticks from ZMQ 25121 to NATS
+[[mapping]]
+name = "StockTicks"
+zmq_endpoints = ["tcp://192.168.6.7:25121"]
+zmq_topics    = ["data/api/Tick"]
+nats_uri      = "nats://localhost:4222"
+nats_subject  = "market_data.STK_CN.tick"
+
+# Forward Bars from ZMQ 6120 to NATS
+[[mapping]]
+name = "StockBars1m"
+zmq_endpoints = ["tcp://192.168.6.7:6120"]
+# Note: Original README listed "data/api/Tick" here, might need verification
+zmq_topics    = ["data/api/Bar"] # Assuming Bar based on NATS subject
+nats_uri      = "nats://localhost:4222"
+nats_subject  = "market_data.STK_CN.bar.1m" 
