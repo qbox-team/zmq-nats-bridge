@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
 
     let mut tasks = vec![];
 
-    for mapping in config.mappings {
+    for mapping in config.forward_mappings {
         let mapping_name = mapping.name.as_deref().unwrap_or("unnamed");
         tracing::info!(
             mapping_name,

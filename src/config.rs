@@ -7,8 +7,7 @@ pub struct Config {
     pub zmq: ZmqConfig,
     #[serde(default)]
     pub nats: NatsConfig,
-    #[serde(rename = "forward_mappings")]
-    pub mappings: Vec<Mapping>,
+    pub forward_mappings: Vec<Mapping>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -51,7 +50,7 @@ impl Default for ZmqConfig {
 // Helper function to load configuration
 pub fn load_config(path: &str) -> Result<Config, config::ConfigError> {
     let settings = config::Config::builder()
-        .add_source(config::File::with_name(path))
+        .add_source(config::File::with_name(path).format(config::FileFormat::Toml))
         // Add environment variable overrides if needed
         // .add_source(config::Environment::with_prefix("APP"))
         .build()?;
