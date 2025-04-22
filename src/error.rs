@@ -1,4 +1,5 @@
 use thiserror::Error;
+use std::path::PathBuf;
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -21,5 +22,22 @@ pub enum AppError {
     Forwarder(String),
 }
 
+#[derive(Error, Debug)]
+pub enum LoggingError {
+    #[error("Failed to create log directory at {path}: {source}")]
+    LogDirectoryCreation {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    
+    #[error("Invalid log level '{level}'. Must be one of: trace, debug, info, warn, error")]
+    InvalidLogLevel { level: String },
+    
+    #[error("Failed to initialize logging: {0}")]
+    InitializationError(String),
+}
+
 // Define a type alias for convenience
-pub type Result<T> = std::result::Result<T, AppError>; 
+pub type Result<T> = std::result::Result<T, AppError>;
+pub type LoggingResult<T> = std::result::Result<T, LoggingError>; 

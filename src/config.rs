@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::time::Duration;
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -7,6 +8,8 @@ pub struct Config {
     pub zmq: ZmqConfig,
     #[serde(default)]
     pub nats: NatsConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
     pub forward_mappings: Vec<Mapping>,
 }
 
@@ -22,6 +25,36 @@ pub struct NatsConfig {
     pub user: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct LoggingConfig {
+    #[serde(default)]
+    pub console: ConsoleLogging,
+    #[serde(default)]
+    pub file: FileLogging,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ConsoleLogging {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_console_level")]
+    pub level: String,
+    #[serde(default = "default_true")]
+    pub colors: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FileLogging {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_file_level")]
+    pub level: String,
+    #[serde(default = "default_log_path")]
+    pub path: PathBuf,
+    #[serde(default = "default_true")]
+    pub append: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -45,6 +78,49 @@ impl Default for ZmqConfig {
             heartbeat: default_heartbeat(),
         }
     }
+}
+
+// Default implementations
+impl Default for ConsoleLogging {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            level: "info".to_string(),
+            colors: true,
+        }
+    }
+}
+
+impl Default for FileLogging {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            level: "debug".to_string(),
+            path: PathBuf::from("logs/zmq-nats-bridge.log"),
+            append: true,
+        }
+    }
+}
+
+// Helper functions for defaults
+fn default_true() -> bool {
+    true
+}
+
+fn default_false() -> bool {
+    false
+}
+
+fn default_console_level() -> String {
+    "info".to_string()
+}
+
+fn default_file_level() -> String {
+    "debug".to_string()
+}
+
+fn default_log_path() -> PathBuf {
+    PathBuf::from("logs/zmq-nats-bridge.log")
 }
 
 // Helper function to load configuration

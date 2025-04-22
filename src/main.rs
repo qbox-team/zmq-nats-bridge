@@ -1,11 +1,12 @@
 mod config;
 mod error;
 mod forwarder;
+mod logging;
 
 use crate::config::load_config;
 use crate::error::{AppError, Result};
 use clap::Parser;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use logging::init_logging;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -17,39 +18,40 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing subscriber
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();
-
     // Parse command-line arguments
     let args = Args::parse();
 
     tracing::info!("Loading configuration from: {}", args.config);
     let config = load_config(&args.config).map_err(AppError::Config)?;
 
+    // Initialize logging based on configuration
+    init_logging(&config.logging)
+        .map_err(|e| AppError::Forwarder(format!("Failed to initialize logging: {}", e)))?;
+
     tracing::info!("Configuration loaded: {:?}", config);
 
     let mut tasks = vec![];
 
     for mapping in config.forward_mappings {
-        let mapping_name = mapping.name.as_deref().unwrap_or("unnamed");
-        tracing::info!(
-            mapping_name,
-            zmq_endpoints = ?mapping.zmq_endpoints, 
-            nats_subject = %mapping.nats_subject,
-            "Setting up forwarder task"
-        );
         let nats_config = config.nats.clone(); // Clone NATS config for the task
         let zmq_config = config.zmq.clone();   // Clone ZMQ config for the task
         let current_mapping = mapping.clone(); // Clone mapping for the task
 
         let task = tokio::spawn(async move {
-            // Instantiate and run the forwarder logic from src/forwarder.rs
+            let mapping_name = current_mapping.name.clone().unwrap_or_else(|| "unnamed".to_string());
+            tracing::info!(
+                mapping_name = %mapping_name,
+                zmq_endpoints = ?current_mapping.zmq_endpoints, 
+                nats_subject = %current_mapping.nats_subject,
+                "Setting up forwarder task"
+            );
+
             if let Err(e) = forwarder::run(current_mapping, nats_config, zmq_config).await {
-                // Error logging now happens inside the forwarder::run instrumented span
-                // We just return the error here
+                tracing::error!(
+                    error = %e,
+                    mapping_name = %mapping_name,
+                    "Forwarder task failed"
+                );
                 return Err(e);
             }
             Ok(())
@@ -61,8 +63,14 @@ async fn main() -> Result<()> {
     for task in tasks {
         match task.await {
             Ok(Ok(())) => { /* Task completed successfully */ }
-            Ok(Err(e)) => tracing::error!("Forwarder task finished with error: {}", e),
-            Err(e) => tracing::error!("Tokio task join error: {}", e),
+            Ok(Err(e)) => tracing::error!(
+                error = %e,
+                "Forwarder task finished with error"
+            ),
+            Err(e) => tracing::error!(
+                error = %e,
+                "Tokio task join error"
+            ),
         }
     }
 
