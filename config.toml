@@ -29,7 +29,7 @@ nats_subject = "market_data.FUT_CN.tick"
 [[forward_mappings]]
 name = "FuturesBars1m"
 zmq_endpoints = ["tcp://192.168.6.7:1422"]
-zmq_topics = ["data/api/Bar"]
+zmq_topics = [""]
 nats_uri = "nats://localhost:4222"
 nats_subject = "market_data.FUT_CN.bar.1m"
 
@@ -37,7 +37,7 @@ nats_subject = "market_data.FUT_CN.bar.1m"
 [[forward_mappings]]
 name = "StockTicks"
 zmq_endpoints = ["tcp://192.168.6.7:25121"]
-zmq_topics = ["data/api/Tick"]
+zmq_topics = [""]
 nats_uri = "nats://localhost:4222"
 nats_subject = "market_data.STK_CN.tick"
 
@@ -46,7 +46,7 @@ nats_subject = "market_data.STK_CN.tick"
 name = "StockBars1m"
 zmq_endpoints = ["tcp://192.168.6.7:6120"]
 # Note: Original README listed "data/api/Tick" here, might need verification
-zmq_topics = ["data/api/Bar"]              # Assuming Bar based on NATS subject
+zmq_topics = [""]                          # Assuming Bar based on NATS subject
 nats_uri = "nats://localhost:4222"
 nats_subject = "market_data.STK_CN.bar.1m"
 

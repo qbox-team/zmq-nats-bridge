@@ -1,22 +1,33 @@
 use thiserror::Error;
 use std::path::PathBuf;
+use std::error::Error as StdError;
+use std::fmt;
+
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("Configuration error: {0}")]
+    InvalidConfig(String),
+}
 
 #[derive(Error, Debug)]
 pub enum AppError {
     #[error("Configuration error: {0}")]
     Config(#[from] config::ConfigError),
 
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
     #[error("ZMQ error: {0}")]
     Zmq(#[from] zeromq::ZmqError),
 
-    #[error("NATS error: {0}")]
-    Nats(#[from] async_nats::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 
     #[error("Task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("NATS error: {0}")]
+    Nats(#[from] async_nats::error::Error<async_nats::client::PublishErrorKind>),
+
+    #[error("Other error: {0}")]
+    Other(#[from] Box<dyn StdError + Send + Sync>),
 
     #[error("Forwarder error: {0}")]
     Forwarder(String),
