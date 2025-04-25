@@ -121,4 +121,10 @@ logging:
     # Path to log file (will be created if doesn't exist)
     path: "logs/zmq-nats-bridge.log"
     # Whether to append to existing log file
-    append: true 
+    append: true
+
+# Optional section for internal tuning parameters
+# tuning:
+#   stats_report_interval_secs: 60 # Interval (seconds) for logging periodic stats
+#   task_retry_delay_secs: 5       # Delay (seconds) between retrying a failed forwarder task
+#   task_max_retries: 5            # Max attempts to retry a failed forwarder task

@@ -3,12 +3,42 @@ use std::time::Duration;
 use std::path::PathBuf;
 use humantime_serde;
 
+// --- Default value functions for TuningConfig ---
+fn default_stats_interval() -> u64 { 60 }
+fn default_task_retry_delay() -> u64 { 5 }
+fn default_task_max_retries() -> u32 { 5 }
+
+// --- Internal Tuning Parameters --- 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TuningConfig {
+    #[serde(default = "default_stats_interval")]
+    pub stats_report_interval_secs: u64,
+    #[serde(default = "default_task_retry_delay")]
+    pub task_retry_delay_secs: u64, 
+    #[serde(default = "default_task_max_retries")]
+    pub task_max_retries: u32,
+}
+
+// --- Default implementation for TuningConfig --- 
+impl Default for TuningConfig {
+    fn default() -> Self {
+        Self {
+            stats_report_interval_secs: default_stats_interval(),
+            task_retry_delay_secs: default_task_retry_delay(),
+            task_max_retries: default_task_max_retries(),
+        }
+    }
+}
+
+// --- Main Configuration --- 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub forward_mappings: Vec<ForwardMapping>,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)] // Use default TuningConfig if section is missing
+    pub tuning: TuningConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -110,6 +140,7 @@ fn default_log_path() -> PathBuf {
     PathBuf::from("logs/zmq-nats-bridge.log")
 }
 
+// Restore Default impls
 impl Default for ConsoleLogging {
     fn default() -> Self {
         Self {

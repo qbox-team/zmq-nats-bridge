@@ -2,175 +2,147 @@
 
 ## Feature Requirements
 
-This application acts as a bridge, forwarding messages subscribed from ZeroMQ (ZMQ) topics to NATS subjects based on a flexible configuration.
+This application acts as a bridge, forwarding messages subscribed from ZeroMQ (ZMQ) topics to NATS subjects based on a flexible YAML configuration.
 
 **Core Functionality:**
 
 *   **ZMQ Subscription:** Subscribe to specified topics on one or more ZMQ PUB endpoints (using `zmq::SUB` sockets).
 *   **NATS Publishing:** Publish received ZMQ message payloads to a configured NATS subject.
-*   **Raw Forwarding:** Forward the raw byte payload of the ZMQ message directly to NATS without inspection or modification. The ZMQ topic used for filtering is *not* forwarded.
-*   **Configuration Driven:** Define all forwarding rules, connection details, and behavior via a configuration file (e.g., `config.toml`).
-*   **Multiple Mappings:** Support multiple independent forwarding mappings, each potentially connecting to different ZMQ endpoints and NATS subjects.
+*   **Raw Forwarding:** Forward the raw byte payload of the ZMQ message (typically the second frame) directly to NATS without inspection or modification. The ZMQ topic (typically the first frame) is used for filtering and subject mapping.
+*   **Configuration Driven:** Define all forwarding rules, connection details, logging, and tuning parameters via a YAML configuration file (default: `config.yaml`).
+*   **Multiple Mappings:** Support multiple independent forwarding mappings, each potentially connecting to different ZMQ endpoints, applying different topic-to-subject transformations, and publishing to NATS.
+*   **Topic/Subject Mapping:** Transform ZMQ topics into NATS subjects using a configurable prefix and regex-based replacement rules.
 
 **Reliability and Robustness:**
 
-*   **ZMQ Connection Liveness:** Monitor the health of ZMQ connections. If no messages are received on a subscription within a configurable timeout (`heartbeat * 2`), log a warning, assuming the connection might be stale. (Note: This relies on the ZMQ publisher sending data periodically or having its own keepalive mechanism).
+*   **ZMQ Connection Liveness:** Uses a heartbeat mechanism. If no messages are received on a subscription within a configurable timeout (`heartbeat * 2`), logs a `trace` message. (Note: Requires the ZMQ publisher to send data periodically).
 *   **Automatic Reconnection:**
-    *   **NATS:** Leverage the `nats.rs` library's built-in reconnection capabilities. Implement retry logic for the initial connection attempt.
-    *   **ZMQ:** Handle ZMQ errors during receive operations. Currently logs errors and continues; more advanced reconnection strategies (like socket recreation) could be added if needed.
-*   **Graceful Shutdown:** (TODO/Future) Implement handling for signals (like Ctrl+C) to shut down cleanly, closing connections properly.
+    *   **NATS:** Leverages the `nats.rs` library's built-in reconnection capabilities. Implements retry logic (configurable attempts/delay) for the initial connection attempt.
+    *   **ZMQ:** Implements an outer retry loop for the entire forwarder task if the inner loop fails (e.g., ZMQ connection or subscription fails). Configurable retry delay and max attempts.
+*   **Graceful Shutdown:** Implemented handling for signals (Ctrl+C) to shut down cleanly, signaling all forwarder tasks and waiting for them to complete (with a timeout).
 
 **Operational Requirements:**
 
 *   **CLI Interface:** Provide a command-line interface (using `clap`) to start the bridge, specifying the configuration file path.
-*   **Logging:** Implement structured logging (using `tracing`) for observability, including connection events, errors, and message forwarding details (e.g., message size). Supports both console and file logging with configurable levels and daily rotation.
-*   **Service:** Run as a long-running process. Specific OS-level service integration (systemd, etc.) is out of scope unless explicitly added later.
+*   **Logging:** Implement structured logging (using `tracing`) for observability, including connection events, errors, message forwarding details, and periodic stats. Supports both console and file logging with configurable levels.
+*   **Periodic Stats:** Logs total message counts (received, forwarded, errors) for each mapping at a configurable interval.
+*   **Service:** Run as a long-running process.
 
 **Technology Stack:**
 
 *   **Runtime:** Tokio (Async Rust)
 *   **ZMQ:** `zmq.rs` crate
 *   **NATS:** `nats.rs` crate (async client)
-*   **Configuration:** `config-rs` crate (supporting TOML)
+*   **Configuration:** `config-rs` crate (supporting YAML)
 *   **CLI Parsing:** `clap` crate
-*   **Logging:** `tracing` ecosystem with daily log rotation
+*   **Logging:** `tracing` ecosystem
+*   **Serialization:** `serde`
 
-## Configuration Example (`config.toml`)
+## Configuration (`config.yaml`)
 
-```toml
-# Global ZMQ settings
-[zmq]
-# If no message is received within heartbeat * 2, log a warning.
-# Publisher should send data frequently enough or implement its own keepalives.
-# Value uses humantime format (e.g., "5s", "1m")
-heartbeat = "5s"
+The application is configured using a YAML file (default: `config.yaml`). See `config.example.yaml` for a template.
 
-# Global NATS settings (optional credentials)
-[nats]
-# user = "my_user"
-# password = "my_password"
+**Structure:**
 
-# Define one or more forwarding mappings
-[[forward_mappings]]
-# Optional name for easier logging/identification
-name = "FuturesTicks"
-# List of ZMQ PUB endpoints to connect to (SUB socket)
-zmq_endpoints = ["tcp://192.168.6.7:1402"]
-# List of ZMQ topics to subscribe to
-zmq_topics = ["data/api/Tick"]
-# NATS server URI for this mapping
-nats_uri = "nats://localhost:4222"
-# Target NATS subject to publish messages to
-nats_subject = "market_data.FUT_CN.tick"
+*   `forward_mappings`: An array of mapping objects.
+*   `logging`: Configuration for console and file logging.
+*   `tuning` (Optional): Internal tuning parameters with defaults.
 
-# Example 2: Forwarding Future 1m Bars
-[[forward_mappings]]
-name = "FuturesBars1m"
-zmq_endpoints = ["tcp://192.168.6.7:1422"]
-zmq_topics = ["data/api/Bar"]
-nats_uri = "nats://localhost:4222"
-nats_subject = "market_data.FUT_CN.bar.1m"
+**Example `config.yaml` Snippet:**
 
-# Example 3: Forwarding Stock Ticks
-[[forward_mappings]]
-name = "StockTicks"
-zmq_endpoints = ["tcp://192.168.6.7:25121"]
-zmq_topics = ["data/api/Tick"]
-nats_uri = "nats://localhost:4222"
-nats_subject = "market_data.STK_CN.tick"
-
-# Example 4: Forwarding Stock 1m Bars
-[[forward_mappings]]
-name = "StockBars1m"
-zmq_endpoints = ["tcp://192.168.6.7:6120"]
-zmq_topics = ["data/api/Bar"]              # Assuming Bar based on NATS subject
-nats_uri = "nats://localhost:4222"
-nats_subject = "market_data.STK_CN.bar.1m"
-
+```yaml
 # Logging configuration
-[logging]
-# Console logging settings
-[logging.console]
-# Enable or disable console logging
-enabled = true
-# Log level for console: trace, debug, info, warn, error
-level = "info"
-# Enable ANSI colors in console output
-colors = true
+logging:
+  # Console logging settings
+  console:
+    enabled: true
+    # Available levels: trace, debug, info, warn, error
+    level: "info"
+    colors: true
+  # File logging settings
+  file:
+    enabled: false
+    level: "debug"
+    # Path to log file (will be created if doesn't exist)
+    path: "logs/zmq-nats-bridge.log"
+    # Whether to append to existing log file
+    append: true
 
-# File logging settings
-[logging.file]
-# Enable or disable file logging
-enabled = false
-# Log level for file: trace, debug, info, warn, error
-level = "info"
-# Path to the log file
-path = "logs/zmq-nats-bridge.log"
-# Whether to append to existing log file or create new one
-append = true
+# Optional section for internal tuning parameters
+tuning:
+  stats_report_interval_secs: 60 # Interval (seconds) for logging periodic stats
+  task_retry_delay_secs: 5       # Delay (seconds) between retrying a failed forwarder task
+  task_max_retries: 5            # Max attempts to retry a failed forwarder task
+
+# Forward mappings define how messages flow from ZMQ to NATS
+forward_mappings:
+  # Example: Futures Market Data
+  - name: "FuturesMarketData"      # Unique name for this mapping
+    desc: "Forward futures market data from ZMQ to NATS" # Optional description
+    enable: true                  # Set to false to disable this mapping
+
+    # ZMQ Configuration
+    zmq:
+      endpoints:
+        - "tcp://192.168.1.100:1402" # ZMQ PUB endpoint(s) to connect to
+      topics:
+        - "data.api.Tick"           # ZMQ topic(s) to subscribe to (prefix match)
+        - "data.api.Bar"
+      heartbeat: "30s"              # Optional: Used to calculate receive timeout (heartbeat * 2)
+
+    # NATS Configuration
+    nats:
+      uris:
+        - "nats://localhost:4222"   # NATS server URI(s)
+      user: "my_user"               # Optional NATS user
+      password: "my_password"       # Optional NATS password
+
+    # Topic to Subject Mapping Rules
+    topic_mapping:
+      # Optional prefix added to all generated NATS subjects
+      subject_prefix: "zmq.futures.pb"
+
+      # Topic transformation rules applied sequentially to the ZMQ topic
+      topic_transforms:
+        # Example: Replace path separators with dots (e.g., CZCE/TA/2409 -> CZCE.TA.2409)
+        - pattern: "/"
+          replacement: "."
+        # Example: Replace dots with hyphens (e.g., data.api.Tick -> data-api-Tick)
+        - pattern: "."
+          replacement: "-"
+
+  # --- Add more mappings as needed --- 
+
 ```
 
-## Logging Configuration
+**Topic/Subject Mapping Details:**
 
-The application supports both console and file logging with the following features:
+1.  The ZMQ topic received (e.g., `data.api.Tick/CZCE/TA/2409`) is processed.
+2.  Each rule in `topic_transforms` is applied:
+    *   `pattern`: A string (currently simple string replacement, could be regex in future) to find.
+    *   `replacement`: The string to replace the pattern with.
+    *   Example 1 (`/` -> `.`): `data.api.Tick.CZCE.TA.2409`
+    *   Example 2 (`.` -> `-`): `data-api-Tick-CZCE-TA-2409`
+3.  The `subject_prefix` is prepended.
+4.  Final NATS Subject: `zmq.futures.pb.data-api-Tick-CZCE-TA-2409`
 
-### Console Logging
-- Enabled by default
-- Configurable log level (default: "info")
-- ANSI colors support
-- Shows thread IDs, file locations, and line numbers
+## Building and Running
 
-### File Logging
-- Disabled by default
-- Configurable log level (default: "info")
-- Daily log rotation (files named with date suffix)
-- Default path: "logs/zmq-nats-bridge.log"
-- Shows thread IDs, file locations, and line numbers
-- No ANSI colors for better file readability
+1.  **Build:**
+    ```bash
+    cargo build --release
+    ```
+2.  **Configure:**
+    *   Copy `config.example.yaml` to `config.yaml`.
+    *   Edit `config.yaml` to match your ZMQ endpoints, NATS details, desired topics, and mapping rules.
+3.  **Run:**
+    ```bash
+    ./target/release/zmq-nats-bridge --config config.yaml
+    ```
+    (Or omit `--config` if using the default `config.yaml` path).
 
-To enable file logging, set `enabled = true` in the `[logging.file]` section of your configuration.
+## Development
 
-# Environment Configuration
-
-## Setting Up Environment Variables
-
-1. Copy the example environment file:
-```bash
-cp env.example .env
-```
-
-2. Edit the `.env` file with your actual credentials:
-```bash
-# Required NATS credentials
-NATS_USER=your_actual_username
-NATS_PASSWORD=your_actual_password
-
-# Optional configurations as needed
-# NATS_URI=nats://your-nats-server:4222
-```
-
-3. Make sure `.env` is in your `.gitignore`:
-```bash
-echo ".env" >> .gitignore
-```
-
-## Environment Variables Reference
-
-### Required Variables
-- `NATS_USER`: Username for NATS authentication
-- `NATS_PASSWORD`: Password for NATS authentication
-
-### Optional Variables
-- `NATS_URI`: Custom NATS server URI (default: nats://localhost:4222)
-- `NATS_TLS_CERT`: Path to TLS certificate file
-- `NATS_TLS_KEY`: Path to TLS private key file
-- `NATS_TLS_CA`: Path to TLS CA certificate file
-- `LOG_LEVEL`: Logging level (debug, info, warn, error)
-- `RUST_LOG`: Rust logging configuration
-- `RUST_BACKTRACE`: Enable backtrace for debugging
-
-## Security Notes
-- Never commit `.env` file to version control
-- Use different credentials for development and production
-- Consider using a secrets management system in production
-- Regularly rotate credentials
+*   **Testing:** `cargo test`
+*   **Linting:** `cargo clippy`
+*   **Formatting:** `cargo fmt`

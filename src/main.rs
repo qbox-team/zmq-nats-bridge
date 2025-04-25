@@ -2,6 +2,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{error, info, debug};
+use std::time::Duration;
 
 mod config;
 mod error;
@@ -56,6 +57,11 @@ async fn main() -> Result<()> {
 
     // Process each forward mapping
     let mut handles = Vec::new();
+    // Extract tuning parameters once
+    let stats_interval = Duration::from_secs(config.tuning.stats_report_interval_secs);
+    let retry_delay = Duration::from_secs(config.tuning.task_retry_delay_secs);
+    let max_retries = config.tuning.task_max_retries;
+
     for mapping in config.forward_mappings {
         if !mapping.enable {
             info!("Skipping disabled mapping: {}", mapping.name);
@@ -64,18 +70,20 @@ async fn main() -> Result<()> {
 
         info!("Starting forward mapping: {}", mapping.name);
         
-        // Create topic mapper from the configuration
         let mapper = Arc::new(TopicMapper::new(&mapping.topic_mapping));
-        
-        // Each task gets its own shutdown receiver
         let shutdown_rx = shutdown_tx.subscribe();
-        
-        // Clone mapping for the task
         let task_mapping = mapping.clone();
 
-        // Spawn a task for each mapping
+        // Pass tuning parameters to the forwarder task
         let handle = tokio::spawn(async move {
-            if let Err(e) = forwarder::run(task_mapping, mapper, shutdown_rx).await {
+            if let Err(e) = forwarder::run(
+                task_mapping, 
+                mapper, 
+                shutdown_rx, 
+                stats_interval, 
+                retry_delay, 
+                max_retries
+            ).await {
                 error!("Error in mapping {}: {}", mapping.name, e);
             }
         });
