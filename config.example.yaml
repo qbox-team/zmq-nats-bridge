@@ -1,5 +1,7 @@
 # ZMQ-NATS Bridge Configuration
 # Environment variables can be used with ${VAR_NAME} syntax
+# Copy this file to config.yaml and modify as needed
+# Note: config.yaml is gitignored to protect sensitive information
 
 # Forward mappings define how messages flow from ZMQ to NATS
 forward_mappings:
@@ -11,10 +13,9 @@ forward_mappings:
     # ZMQ Configuration
     zmq:
       endpoints:
-        - "tcp://192.168.6.7:1402"
-        - "tcp://192.168.6.7:1422"
+        - "tcp://zmq-server-1:1401"
+        - "tcp://zmq-server-2:1402"
       topics:
-        - ""
         - "data.api.Tick"
         - "data.api.Bar"
       heartbeat: "30s" # Optional, defaults to no heartbeat if not specified
@@ -22,7 +23,7 @@ forward_mappings:
     # NATS Configuration
     nats:
       uris:
-        - "nats://localhost:4222"
+        - "nats://nats-server:4222"
       # Replace with your actual credentials
       user: "user"
       password: "changeme_user_password"
@@ -55,17 +56,16 @@ forward_mappings:
 
     zmq:
       endpoints:
-        - "tcp://192.168.6.7:25121"
-        - "tcp://192.168.6.7:6120"
+        - "tcp://zmq-server-1:1401"
+        - "tcp://zmq-server-2:1402"
       topics:
-        - ""
         - "data.api.Tick"
         - "data.api.Bar"
       heartbeat: "30s"
 
     nats:
       uris:
-        - "nats://localhost:4222"
+        - "nats://nats-server:4222"
       user: "user"
       password: "changeme_user_password"
 
@@ -85,16 +85,15 @@ forward_mappings:
 
     zmq:
       endpoints:
-        - "tcp://127.0.0.1:5555"
+        - "tcp://zmq-server-1:1401"
       topics:
-        - ""
         - "data.api.Tick"
         - "data.api.Bar"
       heartbeat: "30s"
 
     nats:
       uris:
-        - "nats://localhost:4222"
+        - "nats://nats-server:4222"
       user: "user"
       password: "changeme_user_password"
 
@@ -122,5 +121,4 @@ logging:
     # Path to log file (will be created if doesn't exist)
     path: "logs/zmq-nats-bridge.log"
     # Whether to append to existing log file
-    append: true
-
+    append: true 

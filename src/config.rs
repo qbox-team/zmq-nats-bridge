@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::path::PathBuf;
 use humantime_serde;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub forward_mappings: Vec<ForwardMapping>,
@@ -11,7 +11,7 @@ pub struct Config {
     pub logging: LoggingConfig,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ForwardMapping {
     pub name: String,
     #[allow(dead_code)]
@@ -23,7 +23,7 @@ pub struct ForwardMapping {
     pub topic_mapping: TopicMapping,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct ZmqConfig {
     #[serde(default)]
     pub endpoints: Vec<String>,
@@ -33,7 +33,7 @@ pub struct ZmqConfig {
     pub heartbeat: Option<Duration>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct NatsConfig {
     #[serde(default)]
     pub uris: Vec<String>,
@@ -43,7 +43,7 @@ pub struct NatsConfig {
     pub password: String,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct TopicMapping {
     #[serde(default)]
     pub subject_prefix: String,
@@ -51,7 +51,7 @@ pub struct TopicMapping {
     pub topic_transforms: Vec<TopicTransform>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct TopicTransform {
     #[serde(default)]
     pub pattern: String,
@@ -59,7 +59,7 @@ pub struct TopicTransform {
     pub replacement: String,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct LoggingConfig {
     #[serde(default)]
     pub console: ConsoleLogging,
@@ -67,7 +67,7 @@ pub struct LoggingConfig {
     pub file: FileLogging,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ConsoleLogging {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -77,7 +77,7 @@ pub struct ConsoleLogging {
     pub colors: bool,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FileLogging {
     #[serde(default = "default_false")]
     pub enabled: bool,
@@ -134,13 +134,14 @@ impl Default for FileLogging {
 // Public function to load configuration
 pub fn load_config(path: &str) -> Result<Config, config::ConfigError> {
     let settings = config::Config::builder()
-        // Primary format is YAML
+        // Add the YAML file as a source
         .add_source(config::File::with_name(path))
-        // Add environment variable overrides
-        .add_source(config::Environment::with_prefix("APP"))
         .build()?;
 
-    settings.try_deserialize()
+    // Deserialize the configuration into our Config structure
+    let config: Config = settings.try_deserialize()?;
+    
+    Ok(config)
 }
 
 // Backward compatibility for code that might use Config::load

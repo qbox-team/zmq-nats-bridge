@@ -5,8 +5,7 @@ use async_nats::{self, Client, ConnectOptions};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
-use tokio::time::timeout;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn, trace};
 use zeromq::{Socket, SocketRecv, SubSocket};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -27,7 +26,6 @@ struct Metrics {
     skip(mapping, mapper, shutdown_rx),
     fields(
         mapping_name = %mapping.name,
-        zmq_endpoints = ?mapping.zmq.endpoints,
     )
 )]
 pub async fn run(
@@ -48,6 +46,12 @@ pub async fn run(
 
     // Main connection loop with reconnection logic
     loop {
+        // Check for shutdown signal before attempting to connect
+        if shutdown_rx.try_recv().is_ok() {
+            info!(mapping_name, "Shutdown signal received before connection attempt");
+            return Ok(());
+        }
+
         // Clone shutdown_rx for each attempt to connect/run the loop
         let loop_shutdown_rx = shutdown_rx.resubscribe();
         match run_forwarder_loop(&mapping, &mapper, &mut metrics, loop_shutdown_rx).await {
@@ -101,122 +105,138 @@ async fn run_forwarder_loop(
     mut shutdown_rx: broadcast::Receiver<()>, 
 ) -> Result<()> {
     let mapping_name = &mapping.name;
-    // Calculate heartbeat duration if specified, otherwise default to 30s
-    let heartbeat_timeout = mapping.zmq.heartbeat.unwrap_or_else(|| Duration::from_secs(30)) * 2;
 
     // --- NATS Connection ---
-    // Use the first URI for initial connection
     let nats_uri = mapping.nats.uris.first()
         .ok_or_else(|| AppError::Forwarder("No NATS URI specified".to_string()))?
         .clone();
 
+    info!(mapping_name, nats_uri = %nats_uri, "Attempting NATS connection...");
     let nats_client = connect_nats(&nats_uri, &mapping.nats).await?;
-    info!(mapping_name, nats_uri = %nats_uri, "NATS connection established");
+    info!(mapping_name, nats_uri = %nats_uri, "NATS connection successful");
 
     // --- ZMQ Connection ---
     let mut zmq_socket = SubSocket::new();
+    info!(mapping_name, "Creating new ZMQ subscriber socket");
 
-    // Connect to all specified ZMQ endpoints
-    for endpoint in &mapping.zmq.endpoints {
-        info!(mapping_name, zmq_endpoint = %endpoint, "Connecting ZMQ");
-        zmq_socket.connect(endpoint).await?;
+    let endpoint = mapping.zmq.endpoints.first()
+        .ok_or_else(|| AppError::Forwarder("No ZMQ endpoint specified".to_string()))?;
+    
+    info!(mapping_name, zmq_endpoint = %endpoint, "Attempting ZMQ connection...");
+    tokio::select! {
+        connect_result = zmq_socket.connect(endpoint) => {
+            match connect_result {
+                Ok(_) => {
+                    info!(mapping_name, zmq_endpoint = %endpoint, "ZMQ connection successful");
+                }
+                Err(e) => {
+                    error!(mapping_name, zmq_endpoint = %endpoint, error = %e, "ZMQ connection failed");
+                    return Err(AppError::Zmq(e));
+                }
+            }
+        }
+        _ = shutdown_rx.recv() => {
+            info!(mapping_name, zmq_endpoint = %endpoint, "Shutdown during ZMQ connection");
+            return Ok(());
+        }
     }
 
     // Subscribe to all specified topics
     for topic in &mapping.zmq.topics {
-        info!(
-            mapping_name,
-            zmq_topic = %topic,
-            "Subscribing to ZMQ topic"
-        );
-        zmq_socket.subscribe(topic).await?;
-    }
-
-    info!(mapping_name, "ZMQ socket connected and subscribed");
-
-    // --- Main Forwarding Loop ---
-    loop {
-        let start_time = Instant::now();
-
+        info!(mapping_name, zmq_topic = %topic, "Attempting ZMQ subscription...");
         tokio::select! {
-            // Bias select to check shutdown first
-            biased;
-
-            // Branch 1: Handle Shutdown Signal
-            _ = shutdown_rx.recv() => {
-                info!(mapping_name, "Shutdown signal received, exiting forwarder loop.");
-                break; // Exit the loop gracefully
-            }
-
-            // Branch 2: Process ZMQ messages with timeout
-            zmq_result = timeout(heartbeat_timeout, zmq_socket.recv()) => {
-                match zmq_result {
-                    Ok(Ok(zmq_message)) => {
-                        metrics.messages_received += 1;
-
-                        // Only process messages with at least 2 frames (topic + payload)
-                        if zmq_message.len() < 2 {
-                            warn!(
-                                mapping_name,
-                                num_frames = zmq_message.len(),
-                                "Received ZMQ message with insufficient frames, skipping."
-                            );
-                            continue;
-                        }
-
-                        // Get topic and payload frames - fixed to handle Option properly
-                        let topic_frame = zmq_message.get(0)
-                            .map(|b| b.as_ref())
-                            .unwrap_or_else(|| &[][..]);
-                        let payload_frame = zmq_message.get(1)
-                            .map(|b| b.as_ref())
-                            .unwrap_or_else(|| &[][..]);
-
-                        // Convert topic to string for mapping (lossy for safety)
-                        let topic_str = String::from_utf8_lossy(topic_frame);
-
-                        // Map the topic to NATS subject
-                        let subject = mapper.map_topic(&topic_str);
-
-                        // Forward message to NATS
-                        if let Err(e) = nats_client.publish(subject.clone(), payload_frame.to_vec().into()).await {
-                            error!(mapping_name, error = %e, nats_subject=%subject, "Failed to publish message to NATS");
-                            // In most cases, NATS client will handle reconnection internally
-                            warn!(mapping_name, "NATS publish error. NATS client will attempt to reconnect automatically.");
-                        } else {
-                            metrics.messages_forwarded += 1;
-
-                            // Debug logging
-                            if cfg!(debug_assertions) {
-                                debug!(
-                                    mapping_name,
-                                    zmq_topic = %topic_str,
-                                    nats_subject = %subject,
-                                    payload_size = payload_frame.len(),
-                                    processing_time_ms = start_time.elapsed().as_millis(),
-                                    "Message forwarded"
-                                );
-                            }
-                        }
+            subscribe_result = zmq_socket.subscribe(topic) => {
+                match subscribe_result {
+                    Ok(_) => {
+                        info!(mapping_name, zmq_topic = %topic, "ZMQ subscription successful");
                     }
-                    Ok(Err(e)) => {
-                        error!(mapping_name, error = %e, "Error receiving ZMQ message");
-                        return Err(AppError::Zmq(e));
-                    }
-                    Err(_) => {
-                        // Timeout occurred (no message received within heartbeat_timeout)
-                        warn!(
-                            mapping_name,
-                            timeout_ms = heartbeat_timeout.as_millis(),
-                            "ZMQ Heartbeat timeout. No message received within timeout period."
-                        );
-                        // Don't return an error here, just log a warning and continue listening
+                    Err(e) => {
+                        error!(mapping_name, zmq_topic = %topic, error = %e, "ZMQ subscription failed");
+                        // Decide if one failed subscription should stop the whole forwarder
+                        // For now, let's return the error
+                        return Err(AppError::Zmq(e)); 
                     }
                 }
             }
+            _ = shutdown_rx.recv() => {
+                info!(mapping_name, zmq_topic = %topic, "Shutdown during ZMQ subscription");
+                return Ok(());
+            }
         }
     }
-    Ok(())
+
+    info!(mapping_name, "ZMQ setup complete. Entering main forward loop...");
+
+    // --- Main Forwarding Loop (Manual Polling Workaround) ---
+    // CRITICAL WORKAROUND:
+    // We are using manual polling with non-blocking checks for shutdown
+    // and a blocking `recv().await` followed by `yield_now()` instead of
+    // the more idiomatic `tokio::select!`.
+    // REASON: Testing revealed that `zmq_socket.recv().await` does not function
+    // correctly when used as a branch within `tokio::select!` in this context.
+    // The `select!` macro would wait indefinitely on the `recv()` future
+    // without waking up, even when messages were available (confirmed by 
+    // diagnostic tests using `recv()` outside of `select!`).
+    // This manual loop ensures responsiveness by yielding after each attempt.
+    // Avoid reverting to `tokio::select!` for the ZMQ receive branch unless
+    // the underlying issue in `zmq.rs` or `tokio` interaction is resolved.
+    loop {
+        // 1. Check for shutdown signal (non-blocking)
+        match shutdown_rx.try_recv() {
+            Ok(_) => {
+                info!(mapping_name, "Shutdown signal received, exiting forwarder loop");
+                return Ok(());
+            }
+            Err(broadcast::error::TryRecvError::Empty) => {
+                // No shutdown signal, continue
+            }
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                warn!(mapping_name, "Shutdown receiver lagged! Exiting to be safe.");
+                return Ok(()); // Or Err depending on desired behavior
+            }
+            Err(broadcast::error::TryRecvError::Closed) => {
+                 warn!(mapping_name, "Shutdown channel closed unexpectedly. Exiting.");
+                 return Ok(()); // Or Err
+            }
+        }
+
+        // 2. Try receiving from ZMQ non-blockingly
+        match zmq_socket.recv().await { // NOTE: Using blocking recv as try_recv isn't available easily.
+                                       // This might impact responsiveness if ZMQ blocks for long.
+                                       // Consider revisiting if performance issues arise.
+            Ok(zmq_message) => {
+                // Message received!
+                metrics.messages_received += 1;
+                trace!(mapping_name, num_frames = zmq_message.len(), "Received ZMQ message");
+
+                if zmq_message.len() < 2 {
+                    warn!(mapping_name, num_frames = zmq_message.len(), "Insufficient frames, skipping.");
+                    continue; // Go to next loop iteration
+                }
+
+                let topic_frame = zmq_message.get(0).map(|b| b.as_ref()).unwrap_or(&[][..]);
+                let payload_frame = zmq_message.get(1).map(|b| b.as_ref()).unwrap_or(&[][..]);
+                let topic_str = String::from_utf8_lossy(topic_frame);
+                let subject = mapper.map_topic(&topic_str);
+
+                if let Err(e) = nats_client.publish(subject.clone(), payload_frame.to_vec().into()).await {
+                    error!(mapping_name, error = %e, nats_subject=%subject, "Failed to publish message to NATS");
+                    warn!(mapping_name, "NATS publish error. NATS client will attempt to reconnect automatically.");
+                } else {
+                    metrics.messages_forwarded += 1;
+                    debug!(mapping_name, zmq_topic = %topic_str, nats_subject = %subject, "Message forwarded");
+                }
+            }
+            Err(e) => {
+                // Actual ZMQ error
+                error!(mapping_name, error = %e, "Error receiving ZMQ message");
+                // Consider if specific errors should trigger reconnect vs exit
+                return Err(AppError::Zmq(e)); // Exit loop on ZMQ error
+            }
+        }
+        // Yield control after attempting receive/process to allow other tasks to run.
+        tokio::task::yield_now().await;
+    }
 }
 
 async fn connect_nats(uri: &str, config: &NatsConfig) -> Result<Client> {

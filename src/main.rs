@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::{error, info, debug};
 
 mod config;
 mod error;
@@ -30,9 +30,26 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = load_config(&args.config)
         .map_err(|e| AppError::Config(e))?;
-
+        
     // Setup logging
     setup_logging(&config.logging)?;
+    
+    // Log information about loaded configuration
+    info!("Loaded configuration from {}", args.config);
+    info!("Starting with {} forward mappings", config.forward_mappings.len());
+    
+    // Debug log for entire configuration content 
+    debug!("Complete configuration content:");
+    debug!("-------------------------------------------");
+    if let Ok(config_str) = serde_json::to_string_pretty(&config) {
+        // Split by newlines and log each line separately for better formatting
+        for line in config_str.lines() {
+            debug!("{}", line);
+        }
+    } else {
+        debug!("Failed to serialize configuration for debug logging");
+    }
+    debug!("-------------------------------------------");
 
     // Create a channel for graceful shutdown
     let (shutdown_tx, _) = broadcast::channel(1);
@@ -74,16 +91,29 @@ async fn main() -> Result<()> {
     }
     
     // Send shutdown signal to all tasks
+    info!("Sending shutdown signal to all tasks...");
     let _ = shutdown_tx.send(());
 
-    // Wait for all tasks to complete
-    info!("Waiting for tasks to complete...");
-    for handle in handles {
-        if let Err(e) = handle.await {
-            error!("Task join error: {}", e);
+    // Wait for all tasks to complete with a timeout
+    info!("Waiting for tasks to complete (timeout: 5s)..." );
+    let timeout = tokio::time::sleep(tokio::time::Duration::from_secs(5));
+    tokio::select! {
+        _ = async {
+            for handle in handles {
+                if let Err(e) = handle.await {
+                    error!("Task join error: {}", e);
+                }
+            }
+        } => {
+            info!("All tasks completed gracefully");
+        }
+        _ = timeout => {
+            error!("Timeout waiting for tasks to complete. Forcing exit (some resources may not be cleaned up)." );
+            // Force exit if tasks don't complete
+            std::process::exit(1);
         }
     }
 
-    info!("All tasks completed. Exiting.");
+    info!("Exiting.");
     Ok(())
 }
