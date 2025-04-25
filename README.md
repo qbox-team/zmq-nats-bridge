@@ -84,7 +84,7 @@ forward_mappings:
     # ZMQ Configuration
     zmq:
       endpoints:
-        - "tcp://192.168.1.100:1402" # ZMQ PUB endpoint(s) to connect to
+        - "tcp://your-zmq-server:5555" # ZMQ PUB endpoint(s) to connect to
       topics:
         - "data.api.Tick"           # ZMQ topic(s) to subscribe to (prefix match)
         - "data.api.Bar"
