@@ -1,2 +1,23 @@
-/target
-/logs
+# Environment files
+.env
+.env.*
+!env.example
+
+# Rust specific
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE specific
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Log files
+logs/
+*.log
+
+# Build artifacts
+dist/
+build/

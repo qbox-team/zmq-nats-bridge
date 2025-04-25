@@ -1,95 +1,89 @@
 use crate::config::LoggingConfig;
-use crate::error::{LoggingError, LoggingResult};
+use crate::error::{AppError, Result};
 use std::path::PathBuf;
 use tracing::Level;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
-    fmt::{self, format::FmtSpan, time::UtcTime},
-    layer::SubscriberExt,
+    fmt, 
+    layer::SubscriberExt, 
     util::SubscriberInitExt,
-    EnvFilter,
-    Layer,
+    filter::LevelFilter,
+    prelude::*,
 };
 
-pub fn init_logging(config: &LoggingConfig) -> LoggingResult<()> {
+/// Set up logging based on configuration
+pub fn setup_logging(config: &LoggingConfig) -> Result<()> {
     let mut layers = Vec::new();
 
-    // Configure console logging if enabled
+    // Console logging
     if config.console.enabled {
+        let level_filter = match config.console.level.parse::<LevelFilter>() {
+            Ok(level) => level,
+            Err(_) => LevelFilter::INFO, // Default to INFO if parse fails
+        };
+
         let console_layer = fmt::layer()
-            .with_target(false)
-            .with_level(true)
+            .with_target(true)
             .with_thread_ids(true)
             .with_file(true)
             .with_line_number(true)
-            .with_ansi(config.console.colors)
-            .with_span_events(FmtSpan::CLOSE)
-            .with_timer(UtcTime::rfc_3339());
-
-        // Apply log level filter
-        let level = validate_log_level(&config.console.level)?;
-        let filtered_layer = console_layer.with_filter(EnvFilter::new(&level));
+            .with_ansi(config.console.colors);
+        
+        // Apply filter separately
+        let filtered_layer = console_layer
+            .with_filter(level_filter);
+        
         layers.push(filtered_layer.boxed());
     }
 
-    // Configure file logging if enabled
+    // File logging
     if config.file.enabled {
+        // Create owned PathBuf to avoid temporary value reference issues
+        let file_path = config.file.path.clone();
+        let file_dir = file_path.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let file_name = file_path.file_name()
+            .map(|os| os.to_string_lossy().to_string())
+            .unwrap_or_else(|| "app.log".to_string());
+        
         // Ensure log directory exists
-        let log_path = PathBuf::from(&config.file.path);
-        if let Some(parent) = log_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| LoggingError::LogDirectoryCreation {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
+        if !file_dir.exists() {
+            std::fs::create_dir_all(&file_dir)
+                .map_err(|e| AppError::Io(e))?;
         }
 
-        // Create rotation configuration
-        let rotation = Rotation::DAILY;
+        let level_filter = match config.file.level.parse::<LevelFilter>() {
+            Ok(level) => level,
+            Err(_) => LevelFilter::INFO, // Default to INFO if parse fails
+        };
 
-        // Create file appender
-        let file_appender = RollingFileAppender::new(
-            rotation,
-            log_path.parent().unwrap_or(&log_path),
-            log_path.file_name().unwrap_or_default(),
-        );
-
+        let file_appender = tracing_appender::rolling::daily(&file_dir, file_name);
         let file_layer = fmt::layer()
             .with_target(true)
-            .with_level(true)
             .with_thread_ids(true)
             .with_file(true)
             .with_line_number(true)
             .with_ansi(false)
-            .with_timer(UtcTime::rfc_3339())
             .with_writer(file_appender);
-
-        // Apply log level filter
-        let level = validate_log_level(&config.file.level)?;
-        let filtered_layer = file_layer.with_filter(EnvFilter::new(&level));
+        
+        // Apply filter separately
+        let filtered_layer = file_layer
+            .with_filter(level_filter);
+        
         layers.push(filtered_layer.boxed());
     }
 
-    // Initialize the subscriber with all configured layers
+    // Initialize tracing
     tracing_subscriber::registry()
         .with(layers)
         .try_init()
-        .map_err(|e| LoggingError::InitializationError(e.to_string()))?;
+        .map_err(|e| AppError::Forwarder(format!("Failed to initialize logging: {}", e)))?;
 
     Ok(())
 }
 
-/// Validates and normalizes log level string
-fn validate_log_level(level: &str) -> LoggingResult<String> {
-    let normalized = level.to_lowercase();
-    match normalized.as_str() {
-        "trace" | "debug" | "info" | "warn" | "error" => Ok(normalized),
-        _ => Err(LoggingError::InvalidLogLevel {
-            level: level.to_string(),
-        }),
-    }
-}
-
-/// Helper function to convert log level string to tracing Level
+/// Helper function to parse log level string to tracing::Level
+#[allow(dead_code)]
 pub fn parse_log_level(level: &str) -> Level {
     match level.to_lowercase().as_str() {
         "trace" => Level::TRACE,
@@ -97,19 +91,6 @@ pub fn parse_log_level(level: &str) -> Level {
         "info" => Level::INFO,
         "warn" => Level::WARN,
         "error" => Level::ERROR,
-        _ => Level::INFO,
+        _ => Level::INFO, // Default to INFO for unrecognized levels
     }
-}
-
-/// Helper macro for structured logging
-#[macro_export]
-macro_rules! log_with_context {
-    ($level:expr, $msg:expr, $($field:tt)*) => {
-        tracing::event!(
-            $level,
-            target: module_path!(),
-            $($field)*,
-            message = $msg
-        );
-    };
 } 

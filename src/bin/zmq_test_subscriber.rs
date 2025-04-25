@@ -1,8 +1,7 @@
 use std::error::Error;
 use tokio::time::Duration;
-use tracing::{debug, error, info};
-use zeromq::{Socket, SocketRecv};
 use clap::Parser;
+use zeromq::{Socket, SocketRecv};
 
 /// A ZMQ subscriber for testing purposes
 #[derive(Parser, Debug)]

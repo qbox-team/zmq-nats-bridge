@@ -1,79 +1,89 @@
+use clap::Parser;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+use tracing::{error, info};
+
 mod config;
 mod error;
 mod forwarder;
 mod logging;
+mod topic_mapping;
 
-use crate::config::load_config;
-use crate::error::{AppError, Result};
-use clap::Parser;
-use logging::init_logging;
+use config::load_config;
+use error::{AppError, Result};
+use logging::setup_logging;
+use topic_mapping::TopicMapper;
 
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to the configuration file
-    #[arg(short, long, default_value = "config.toml")]
+    #[arg(short, long, default_value = "config.yaml")]
     config: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse command-line arguments
+    // Parse command line arguments
     let args = Args::parse();
 
-    tracing::info!("Loading configuration from: {}", args.config);
-    let config = load_config(&args.config).map_err(AppError::Config)?;
+    // Load configuration
+    let config = load_config(&args.config)
+        .map_err(|e| AppError::Config(e))?;
 
-    // Initialize logging based on configuration
-    init_logging(&config.logging)
-        .map_err(|e| AppError::Forwarder(format!("Failed to initialize logging: {}", e)))?;
+    // Setup logging
+    setup_logging(&config.logging)?;
 
-    tracing::info!("Configuration loaded: {:?}", config);
+    // Create a channel for graceful shutdown
+    let (shutdown_tx, _) = broadcast::channel(1);
 
-    let mut tasks = vec![];
-
+    // Process each forward mapping
+    let mut handles = Vec::new();
     for mapping in config.forward_mappings {
-        let nats_config = config.nats.clone(); // Clone NATS config for the task
-        let zmq_config = config.zmq.clone();   // Clone ZMQ config for the task
-        let current_mapping = mapping.clone(); // Clone mapping for the task
+        if !mapping.enable {
+            info!("Skipping disabled mapping: {}", mapping.name);
+            continue;
+        }
 
-        let task = tokio::spawn(async move {
-            let mapping_name = current_mapping.name.clone().unwrap_or_else(|| "unnamed".to_string());
-            tracing::info!(
-                mapping_name = %mapping_name,
-                zmq_endpoints = ?current_mapping.zmq_endpoints, 
-                nats_subject = %current_mapping.nats_subject,
-                "Setting up forwarder task"
-            );
+        info!("Starting forward mapping: {}", mapping.name);
+        
+        // Create topic mapper from the configuration
+        let mapper = Arc::new(TopicMapper::new(&mapping.topic_mapping));
+        
+        // Each task gets its own shutdown receiver
+        let shutdown_rx = shutdown_tx.subscribe();
+        
+        // Clone mapping for the task
+        let task_mapping = mapping.clone();
 
-            if let Err(e) = forwarder::run(current_mapping, nats_config, zmq_config).await {
-                tracing::error!(
-                    error = %e,
-                    mapping_name = %mapping_name,
-                    "Forwarder task failed"
-                );
-                return Err(e);
+        // Spawn a task for each mapping
+        let handle = tokio::spawn(async move {
+            if let Err(e) = forwarder::run(task_mapping, mapper, shutdown_rx).await {
+                error!("Error in mapping {}: {}", mapping.name, e);
             }
-            Ok(())
         });
-        tasks.push(task);
+
+        handles.push(handle);
     }
 
-    // Wait for all forwarder tasks to complete
-    for task in tasks {
-        match task.await {
-            Ok(Ok(())) => { /* Task completed successfully */ }
-            Ok(Err(e)) => tracing::error!(
-                error = %e,
-                "Forwarder task finished with error"
-            ),
-            Err(e) => tracing::error!(
-                error = %e,
-                "Tokio task join error"
-            ),
+    // Wait for Ctrl+C signal
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Ctrl+C received, initiating graceful shutdown...");
+        }
+    }
+    
+    // Send shutdown signal to all tasks
+    let _ = shutdown_tx.send(());
+
+    // Wait for all tasks to complete
+    info!("Waiting for tasks to complete...");
+    for handle in handles {
+        if let Err(e) = handle.await {
+            error!("Task join error: {}", e);
         }
     }
 
-    tracing::info!("All forwarder tasks finished.");
+    info!("All tasks completed. Exiting.");
     Ok(())
 }

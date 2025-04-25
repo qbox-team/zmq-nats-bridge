@@ -129,3 +129,48 @@ The application supports both console and file logging with the following featur
 - No ANSI colors for better file readability
 
 To enable file logging, set `enabled = true` in the `[logging.file]` section of your configuration.
+
+# Environment Configuration
+
+## Setting Up Environment Variables
+
+1. Copy the example environment file:
+```bash
+cp env.example .env
+```
+
+2. Edit the `.env` file with your actual credentials:
+```bash
+# Required NATS credentials
+NATS_USER=your_actual_username
+NATS_PASSWORD=your_actual_password
+
+# Optional configurations as needed
+# NATS_URI=nats://your-nats-server:4222
+```
+
+3. Make sure `.env` is in your `.gitignore`:
+```bash
+echo ".env" >> .gitignore
+```
+
+## Environment Variables Reference
+
+### Required Variables
+- `NATS_USER`: Username for NATS authentication
+- `NATS_PASSWORD`: Password for NATS authentication
+
+### Optional Variables
+- `NATS_URI`: Custom NATS server URI (default: nats://localhost:4222)
+- `NATS_TLS_CERT`: Path to TLS certificate file
+- `NATS_TLS_KEY`: Path to TLS private key file
+- `NATS_TLS_CA`: Path to TLS CA certificate file
+- `LOG_LEVEL`: Logging level (debug, info, warn, error)
+- `RUST_LOG`: Rust logging configuration
+- `RUST_BACKTRACE`: Enable backtrace for debugging
+
+## Security Notes
+- Never commit `.env` file to version control
+- Use different credentials for development and production
+- Consider using a secrets management system in production
+- Regularly rotate credentials

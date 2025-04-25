@@ -1,6 +1,6 @@
 use std::error::Error;
 use tokio::time::Duration;
-use tracing::{error, info};
+use tracing;
 use zeromq::{Socket, SocketSend};
 use clap::Parser;
 use bytes::Bytes;
