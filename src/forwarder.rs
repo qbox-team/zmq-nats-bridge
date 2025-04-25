@@ -53,30 +53,49 @@ pub async fn run(
     loop {
         match timeout(heartbeat_timeout_duration, zmq_socket.recv()).await {
             Ok(Ok(zmq_message)) => {
-                debug!(mapping_name, "Received ZMQ message");
+                debug!(
+                    mapping_name,
+                    num_frames = zmq_message.len(),
+                    "Received ZMQ message"
+                );
 
-                if let Some(payload_bytes) = zmq_message.get(1) {
-                    let payload: Bytes = payload_bytes.clone();
+                // Log frame information for debugging
+                for i in 0..zmq_message.len() {
+                    if let Some(frame) = zmq_message.get(i) {
+                        debug!(
+                            mapping_name,
+                            frame_index = i,
+                            frame_size = frame.len(),
+                            "Frame content"
+                        );
+                    }
+                }
 
-                    debug!(
-                        mapping_name,
-                        payload_size = payload.len(),
-                        nats_subject = %mapping.nats_subject,
-                        "Forwarding message"
-                    );
+                // In ZMQ PUB/SUB, the first frame is the topic and the second frame is the message
+                if zmq_message.len() >= 2 {
+                    if let Some(payload_bytes) = zmq_message.get(1) {
+                        let payload: Bytes = payload_bytes.clone();
 
-                    if let Err(e) = nats_client
-                        .publish(mapping.nats_subject.clone(), payload)
-                        .await
-                    {
-                        error!(mapping_name, error = %e, "Failed to publish message to NATS");
-                        warn!(mapping_name, "NATS publish error. Will rely on auto-reconnect.");
+                        debug!(
+                            mapping_name,
+                            payload_size = payload.len(),
+                            nats_subject = %mapping.nats_subject,
+                            "Forwarding message"
+                        );
+
+                        if let Err(e) = nats_client
+                            .publish(mapping.nats_subject.clone(), payload)
+                            .await
+                        {
+                            error!(mapping_name, error = %e, "Failed to publish message to NATS");
+                            warn!(mapping_name, "NATS publish error. Will rely on auto-reconnect.");
+                        }
                     }
                 } else {
                     warn!(
                         mapping_name,
                         num_frames = zmq_message.len(),
-                        "Received ZMQ message with unexpected frame count, skipping."
+                        "Received ZMQ message with insufficient frames, skipping."
                     );
                 }
             }

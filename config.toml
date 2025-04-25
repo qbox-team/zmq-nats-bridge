@@ -5,12 +5,12 @@
 # If no message is received within heartbeat * 2, log a warning.
 # Publisher should send data frequently enough or implement its own keepalives.
 # Value uses humantime format (e.g., "5s", "1m")
-heartbeat = "5s"
+heartbeat = "30s"
 
 # Global NATS settings (optional credentials)
 [nats]
-# user = "my_user"
-# password = "my_password"
+user = "user"
+password = "changeme_user_password"
 
 # Define one or more forwarding mappings
 [[forward_mappings]]
@@ -19,7 +19,7 @@ name = "FuturesTicks"
 # List of ZMQ PUB endpoints to connect to (SUB socket)
 zmq_endpoints = ["tcp://192.168.6.7:1402"]
 # List of ZMQ topics to subscribe to
-zmq_topics = ["data/api/Tick"]
+zmq_topics = ["", "data/api/Tick"]
 # NATS server URI for this mapping
 nats_uri = "nats://localhost:4222"
 # Target NATS subject to publish messages to
@@ -50,6 +50,15 @@ zmq_topics = ["data/api/Bar"]              # Assuming Bar based on NATS subject
 nats_uri = "nats://localhost:4222"
 nats_subject = "market_data.STK_CN.bar.1m"
 
+# Example 4: Testing, forwarding from zmq_test_publisher
+[[forward_mappings]]
+name = "ZmqTestPublisher"
+zmq_endpoints = ["tcp://127.0.0.1:5555"]
+# Note: Original README listed "data/api/Tick" here, might need verification
+zmq_topics = [""]                  # Assuming Bar based on NATS subject
+nats_uri = "nats://localhost:4222"
+nats_subject = "zmq_test_topic"
+
 # Logging configuration
 [logging]
 # Console logging settings
@@ -57,7 +66,7 @@ nats_subject = "market_data.STK_CN.bar.1m"
 # Enable or disable console logging
 enabled = true
 # Log level for console: trace, debug, info, warn, error
-level = "info"
+level = "debug"
 # Enable ANSI colors in console output
 colors = true
 
