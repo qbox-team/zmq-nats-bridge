@@ -100,11 +100,12 @@ forward_mappings:
     # Topic to Subject Mapping Rules
     topic_mapping:
       # Optional prefix added to all generated NATS subjects
-      subject_prefix: "zmq.futures.pb"
+      # Format: {source}.{instance}.{protocol}
+      subject_prefix: "zmq.line1.pb"
 
       # Topic transformation rules applied sequentially to the ZMQ topic
       topic_transforms:
-        # Example: Replace path separators with dots (e.g., CZCE/TA/2409 -> CZCE.TA.2409)
+        # Example: Replace path separators with dots (e.g., 30s/CZCE/SH601 -> 30s.CZCE.SH601)
         - pattern: "/"
           replacement: "."
         # Example: Replace dots with hyphens (e.g., data.api.Tick -> data-api-Tick)
@@ -117,14 +118,19 @@ forward_mappings:
 
 **Topic/Subject Mapping Details:**
 
-1.  The ZMQ topic received (e.g., `data.api.Tick/CZCE/TA/2409`) is processed.
+1.  The ZMQ topic received (e.g., `data.api.Bar/30s/CZCE/SH601`) is processed.
 2.  Each rule in `topic_transforms` is applied:
     *   `pattern`: A string (currently simple string replacement, could be regex in future) to find.
     *   `replacement`: The string to replace the pattern with.
-    *   Example 1 (`/` -> `.`): `data.api.Tick.CZCE.TA.2409`
-    *   Example 2 (`.` -> `-`): `data-api-Tick-CZCE-TA-2409`
+    *   Example 1 (`/` -> `.`): `data.api.Bar.30s.CZCE.SH601`
+    *   Example 2 (`.` -> `-`): `data-api-Bar.30s.CZCE.SH601`
 3.  The `subject_prefix` is prepended.
-4.  Final NATS Subject: `zmq.futures.pb.data-api-Tick-CZCE-TA-2409`
+4.  Final NATS Subject: `zmq.line1.pb.data-api-Bar.30s.CZCE.SH601`
+
+**Example Mappings:**
+- Original ZMQ topic -> Transformed NATS subject
+  - `data.api.Bar/30s/CZCE/SH601` -> `zmq.line1.pb.data-api-Bar.30s.CZCE.SH601`
+  - `data.api.Tick/SHSE/688176` -> `zmq.line1.pb.data-api-tick.SHSE.688176`
 
 ## Building and Running
 
@@ -146,3 +152,8 @@ forward_mappings:
 *   **Testing:** `cargo test`
 *   **Linting:** `cargo clippy`
 *   **Formatting:** `cargo fmt`
+
+
+## TODOs
+
+- [] if upstream zmq restarts, cannot receive message unless this service also restart.
