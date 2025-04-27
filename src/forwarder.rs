@@ -136,27 +136,43 @@ async fn run_forwarder_loop(
     let mut zmq_socket = SubSocket::new();
     info!(mapping_name, "Creating new ZMQ subscriber socket");
 
-    let endpoint = mapping.zmq.endpoints.first()
-        .ok_or_else(|| AppError::Forwarder("No ZMQ endpoint specified".to_string()))?;
-    
-    info!(mapping_name, zmq_endpoint = %endpoint, "Attempting ZMQ connection...");
-    tokio::select! {
-        connect_result = zmq_socket.connect(endpoint) => {
-            match connect_result {
-                Ok(_) => {
-                    info!(mapping_name, zmq_endpoint = %endpoint, "ZMQ connection successful");
-                }
-                Err(e) => {
-                    error!(mapping_name, zmq_endpoint = %endpoint, error = %e, "ZMQ connection failed");
-                    return Err(AppError::Zmq(e));
-                }
+    if mapping.zmq.endpoints.is_empty() {
+        error!(mapping_name, "No ZMQ endpoints specified in configuration.");
+        return Err(AppError::Forwarder("No ZMQ endpoint specified".to_string()));
+    }
+
+    let mut successful_zmq_connections = 0;
+    for endpoint in &mapping.zmq.endpoints {
+        info!(mapping_name, zmq_endpoint = %endpoint, "Attempting ZMQ connection...");
+        // We need to await the connect future
+        let connect_result = zmq_socket.connect(endpoint).await;
+
+        match connect_result {
+            Ok(_) => {
+                info!(mapping_name, zmq_endpoint = %endpoint, "ZMQ connection successful");
+                successful_zmq_connections += 1;
+            }
+            Err(e) => {
+                // Log error but continue trying other endpoints
+                warn!(mapping_name, zmq_endpoint = %endpoint, error = %e, "ZMQ connection failed");
             }
         }
-        _ = shutdown_rx.recv() => {
-            info!(mapping_name, zmq_endpoint = %endpoint, "Shutdown during ZMQ connection");
+        // Allow checking for shutdown between connection attempts
+        if shutdown_rx.try_recv().is_ok() {
+            info!(mapping_name, "Shutdown signal received during ZMQ connection attempts");
             return Ok(());
         }
     }
+
+    if successful_zmq_connections == 0 {
+        error!(mapping_name, "Failed to connect to any of the specified ZMQ endpoints.");
+        // Returning a specific ZMQ error might be better if we had the last error,
+        // but a general Forwarder error is okay here.
+        return Err(AppError::Forwarder(
+            "Failed to connect to any ZMQ endpoint".to_string(),
+        ));
+    }
+    info!(mapping_name, count = successful_zmq_connections, "Completed ZMQ connection attempts.");
 
     // Subscribe to all specified topics
     for topic in &mapping.zmq.topics {
@@ -233,12 +249,17 @@ async fn run_forwarder_loop(
                             "Final Stats on Error: Received={}, Forwarded={}, Errors={}", 
                             metrics.messages_received, metrics.messages_forwarded, metrics.errors
                         );
+                        // Propagate ZMQ error to the outer loop for full task restart
                         return Err(AppError::Zmq(e)); // Exit loop on ZMQ error
                     }
                     Err(_) => {
                         // Timeout occurred (no message received within heartbeat_timeout)
-                        trace!(mapping_name, timeout_ms = heartbeat_timeout.as_millis(), "ZMQ Heartbeat timeout in select!.");
-                        // Continue loop after timeout - proceed to stats report check
+                        warn!(mapping_name, timeout = ?heartbeat_timeout, "ZMQ Heartbeat timeout occurred. Triggering reconnect.");
+                        // Return an error to trigger the outer reconnect loop
+                        return Err(AppError::Forwarder(format!(
+                            "ZMQ heartbeat timeout after {:?}",
+                            heartbeat_timeout
+                        )));
                     }
                 }
             }
