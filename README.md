@@ -156,4 +156,4 @@ forward_mappings:
 
 ## TODOs
 
-- [] if upstream zmq restarts, cannot receive message unless this service also restart.
+- [x] if upstream zmq restarts, cannot receive message unless this service also restart.
