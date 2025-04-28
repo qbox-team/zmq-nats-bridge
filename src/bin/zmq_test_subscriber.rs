@@ -1,7 +1,7 @@
 use std::error::Error;
-use tokio::time::Duration;
+use std::time::{Duration, Instant};
 use clap::Parser;
-use zeromq::{Socket, SocketRecv};
+use zmq::{Context, SocketType};
 
 /// A ZMQ subscriber for testing purposes
 #[derive(Parser, Debug)]
@@ -20,8 +20,7 @@ struct Args {
     heartbeat: u64,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     // Initialize tracing with console output
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -40,44 +39,62 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("==================================\n");
 
     // Create and configure ZMQ socket
-    let mut socket = zeromq::SubSocket::new();
-    socket.connect(&args.endpoint).await?;
-    socket.subscribe(&args.topic).await?;
+    let context = Context::new();
+    let socket = context.socket(SocketType::SUB)?;
+    socket.connect(&args.endpoint)?;
+    socket.set_subscribe(&args.topic.as_bytes())?;
 
     println!("✅ Successfully connected and subscribed");
     println!("📥 Waiting for messages... (Press Ctrl+C to exit)\n");
 
-    // Main message receiving loop
-    loop {
-        match tokio::time::timeout(Duration::from_secs(args.heartbeat), socket.recv()).await {
-            Ok(Ok(message)) => {
-                println!("📥 Received new message");
-                println!("   Frame count: {}", message.len());
+    // Set up periodic reporting using std::time
+    let report_interval = Duration::from_secs(2);
+    let mut message_count: u64 = 0;
+    let mut last_report_time = Instant::now();
 
-                // Print each frame's content
-                for i in 0..message.len() {
-                    if let Some(frame) = message.get(i) {
-                        match String::from_utf8(frame.to_vec()) {
-                            Ok(text) => {
-                                println!("   Frame {}: {}", i, text);
-                            }
-                            Err(_) => {
-                                println!("   Frame {}: [binary data, length: {}]", i, frame.len());
-                            }
-                        }
-                    }
+    // Main message receiving loop (Blocking)
+    loop {
+        // Use blocking recv_multipart
+        match socket.recv_multipart(0) {
+            Ok(_message_parts) => {
+                message_count += 1;
+                // Message received, no detailed print for performance
+            }
+            Err(e) => {
+                 eprintln!("❌ Error receiving message: {}\n", e);
+                 // Check for interrupt and continue if desired, otherwise break/return
+                if e == zmq::Error::EINTR {
+                    println!("Interrupt received, continuing...");
+                    continue;
                 }
-                println!(); // Add empty line for better readability
-            }
-            Ok(Err(e)) => {
-                eprintln!("❌ Error receiving message: {}\n", e);
-                break;
-            }
-            Err(_) => {
-                println!("⏳ No message received in {} seconds\n", args.heartbeat);
+                 // Check for EAGAIN if using non-blocking flags (not used here, but good practice)
+                // if e == zmq::Error::EAGAIN {
+                //     // No message available yet (if non-blocking)
+                //     thread::sleep(Duration::from_millis(1)); // Avoid busy-waiting
+                //     continue;
+                // }
+                break; // Exit loop on other socket errors
             }
         }
+
+        // Check if it's time to report stats
+        let now = Instant::now();
+        let elapsed_since_last = now.duration_since(last_report_time);
+
+        if elapsed_since_last >= report_interval {
+            let rate = message_count as f64 / elapsed_since_last.as_secs_f64();
+            println!("📊 Stats: Received {} messages in {:.2?} (~{:.1} msgs/sec)",
+                     message_count, elapsed_since_last, rate);
+
+            // Reset for next interval
+            message_count = 0;
+            last_report_time = now;
+        }
+        // No explicit timeout check needed with blocking recv unless recv itself times out
+        // (which requires setting RECVTIMEO socket option)
     }
 
+    // Loop exited, likely due to error
+    eprintln!("Exiting due to receive error.");
     Ok(())
 } 

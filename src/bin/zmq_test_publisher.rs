@@ -1,9 +1,9 @@
 use std::error::Error;
-use tokio::time::Duration;
+use std::time::Duration;
+use std::thread;
 use tracing;
-use zeromq::{Socket, SocketSend};
+use zmq::{Context, SocketType};
 use clap::Parser;
-use bytes::Bytes;
 
 /// A ZMQ publisher for testing purposes
 #[derive(Parser, Debug)]
@@ -26,8 +26,7 @@ struct Args {
     interval: u64,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     // Initialize tracing with console output
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -47,8 +46,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("=================================\n");
 
     // Create and configure ZMQ socket
-    let mut socket = zeromq::PubSocket::new();
-    socket.bind(&args.endpoint).await?;
+    let context = Context::new();
+    let socket = context.socket(SocketType::PUB)?;
+    socket.bind(&args.endpoint)?;
 
     println!("✅ Successfully bound to endpoint");
     println!("📤 Starting to publish messages... (Press Ctrl+C to exit)\n");
@@ -56,25 +56,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Main message sending loop
     let mut counter = 0;
     loop {
-        let message = format!("{} {}", args.message_prefix, counter);
+        let payload_string = format!("{} {}", args.message_prefix, counter);
         println!("📤 Sending message #{}", counter);
         println!("   Topic: {}", args.topic);
-        println!("   Data:  {}", message);
+        println!("   Data:  {}", payload_string);
 
-        // Create a multi-frame message (topic + payload)
-        let mut msg = zeromq::ZmqMessage::from(args.topic.as_str());
-        msg.push_back(Bytes::from(message.as_bytes().to_vec()));
+        // Prepare multi-part message using slices &[u8]
+        let topic_bytes = args.topic.as_bytes();
+        let payload_bytes = payload_string.as_bytes();
+        let message_parts = vec![topic_bytes, payload_bytes];
 
-        match socket.send(msg).await {
+        // Use blocking send_multipart (flags = 0)
+        match socket.send_multipart(&message_parts, 0) {
             Ok(_) => {
                 println!("   ✅ Message sent successfully\n");
             }
             Err(e) => {
                 eprintln!("   ❌ Error sending message: {}\n", e);
+                // Consider breaking or returning error on send failure
             }
         }
 
         counter += 1;
-        tokio::time::sleep(Duration::from_secs(args.interval)).await;
+        // Use std::thread::sleep
+        thread::sleep(Duration::from_secs(args.interval));
     }
 } 

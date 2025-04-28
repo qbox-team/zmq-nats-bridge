@@ -1,26 +1,23 @@
 use std::error::Error;
-use std::time::Duration;
-use tokio::time::timeout;
-use zeromq::{Socket, SocketRecv, SubSocket};
+use zmq::{Context, SocketType};
 
 // --- Configuration (Hardcoded for simplicity) ---
 const ZMQ_ENDPOINT: &str = "tcp://127.0.0.1:5555"; // Adjust if your publisher uses a different endpoint
 const ZMQ_TOPIC: &str = "test_topic";         // Adjust if your publisher uses a different topic
-const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60); // Increased timeout
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    println!("--- Minimal ZMQ Debug Subscriber ---");
+fn main() -> Result<(), Box<dyn Error>> {
+    println!("--- Minimal ZMQ Debug Subscriber (Blocking) ---");
     println!("Endpoint: {}", ZMQ_ENDPOINT);
     println!("Topic:    {}", ZMQ_TOPIC);
     println!("------------------------------------");
 
     // --- ZMQ Connection ---
-    let mut zmq_socket = SubSocket::new();
+    let context = Context::new();
+    let zmq_socket = context.socket(SocketType::SUB)?;
     println!("Creating new ZMQ subscriber socket");
 
     println!("Attempting to connect to ZMQ endpoint: {}", ZMQ_ENDPOINT);
-    match zmq_socket.connect(ZMQ_ENDPOINT).await {
+    match zmq_socket.connect(ZMQ_ENDPOINT) {
         Ok(_) => {
             println!("Successfully connected to ZMQ endpoint: {}", ZMQ_ENDPOINT);
         }
@@ -31,7 +28,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     println!("Attempting to subscribe to ZMQ topic: {}", ZMQ_TOPIC);
-    match zmq_socket.subscribe(ZMQ_TOPIC).await {
+    match zmq_socket.set_subscribe(ZMQ_TOPIC.as_bytes()) {
         Ok(_) => {
             println!("Successfully subscribed to ZMQ topic: {}", ZMQ_TOPIC);
         }
@@ -43,37 +40,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("ZMQ socket connected and subscribed. Waiting for messages...");
 
-    // --- Main Receiving Loop (Simplified) ---
+    // --- Main Receiving Loop (Blocking) ---
     loop {
-        match timeout(HEARTBEAT_TIMEOUT, zmq_socket.recv()).await {
-            Ok(Ok(zmq_message)) => {
+        match zmq_socket.recv_multipart(0) {
+            Ok(message_parts) => {
                 println!("
-📥 Received ZMQ message with {} frames", zmq_message.len());
+📥 Received ZMQ message with {} frames", message_parts.len());
 
                 // Print each frame
-                for i in 0..zmq_message.len() {
-                    if let Some(frame) = zmq_message.get(i) {
-                        match String::from_utf8(frame.to_vec()) {
-                            Ok(text) => {
-                                println!("   Frame {}: {}", i, text);
-                            }
-                            Err(_) => {
-                                println!("   Frame {}: [binary data, length: {}]", i, frame.len());
-                            }
+                for (i, frame) in message_parts.iter().enumerate() {
+                    match String::from_utf8(frame.clone()) {
+                        Ok(text) => {
+                            println!("   Frame {}: {}", i, text);
+                        }
+                        Err(_) => {
+                            println!("   Frame {}: [binary data, length: {}]", i, frame.len());
                         }
                     }
                 }
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 eprintln!("❌ Error receiving ZMQ message: {}", e);
-                return Err(e.into()); // Exit on error
-            }
-            Err(_) => {
-                // Timeout occurred
-                println!("⏳ No message received within {} seconds.", HEARTBEAT_TIMEOUT.as_secs());
+                if e == zmq::Error::EINTR {
+                    println!("Interrupt received, continuing...");
+                    continue;
+                }
+                return Err(e.into());
             }
         }
     }
-    // Unreachable, loop is infinite
-    // Ok(())
 } 

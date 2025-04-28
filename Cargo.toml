@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 async-nats = "0.40.0"
-zeromq = "0.4.1"
+zmq = "0.10.0"
 tokio = { version = "1.39.2", features = ["full"] }
 clap = { version = "4.5.9", features = ["derive"] }
 tracing = "0.1.40"
@@ -22,7 +22,7 @@ config = { version = "0.14.0", features = ["yaml", "json"] }
 tracing-appender = "0.2"
 humantime = "2.1"
 dotenv = "0.15.0"
-quanta = "0.10"
+async-channel = "2.3"
 
 [dev-dependencies]
 assert_cmd = "2.0"

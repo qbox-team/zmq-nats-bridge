@@ -17,10 +17,7 @@ pub enum AppError {
     Logging(String),
 
     #[error("ZMQ error: {0}")]
-    Zmq(#[from] zeromq::ZmqError),
-
-    #[error("ZMQ connection error: {0}")]
-    ZmqConnection(String),
+    Zmq(#[from] zmq::Error),
 
     #[error("NATS error: {0}")]
     Nats(#[from] async_nats::Error),

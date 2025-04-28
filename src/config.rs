@@ -5,43 +5,47 @@ use humantime_serde;
 use config::{Config as ConfigCrate, ConfigError, File};
 
 // --- Default value functions for TuningConfig ---
-fn default_stats_interval() -> Duration { Duration::from_secs(60) }
+fn default_stats_interval() -> Duration { Duration::from_secs(30) }
 fn default_task_retry_delay() -> Duration { Duration::from_secs(5) }
 fn default_task_max_retries() -> u32 { 5 }
-fn default_channel_buffer_size() -> usize { 100 }
+fn default_channel_buffer_size() -> usize { 10_000 }
 fn default_true() -> bool { true }
 fn default_false() -> bool { false }
 fn default_console_level() -> String { "info".to_string() }
 fn default_file_level() -> String { "debug".to_string() }
 fn default_log_path() -> PathBuf { PathBuf::from("logs/zmq-nats-bridge.log") }
+fn default_max_consecutive_nats_errors() -> u32 { 10 }
 
-/// Tuning parameters for task behavior and performance.
+/// Tuning configuration parameters
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)] // Allows missing fields in TOML to use default values
 pub struct TuningConfig {
-    /// Interval (seconds) for logging periodic forwarder stats.
-    #[serde(with = "humantime_serde")]
-    #[serde(default = "default_stats_interval")]
-    pub stats_report_interval_secs: Duration,
-    /// Delay (seconds) between retrying a failed forwarder task.
-    #[serde(with = "humantime_serde")]
-    #[serde(default = "default_task_retry_delay")]
-    pub task_retry_delay_secs: Duration,
-    /// Max attempts to retry a failed forwarder task connection loop.
-    #[serde(default = "default_task_max_retries")]
-    pub task_max_retries: u32,
-    /// Max messages to buffer in the internal channel between ZMQ recv and NATS pub.
+    /// Size of the buffer for the internal async_channel connecting ZMQ thread to NATS task.
     #[serde(default = "default_channel_buffer_size")]
     pub channel_buffer_size: usize,
+    /// Maximum number of consecutive NATS publish errors before the forwarder task triggers a reconnect.
+    #[serde(default = "default_max_consecutive_nats_errors")]
+    pub max_consecutive_nats_errors: u32,
+    /// Interval (in seconds) for reporting forwarder statistics.
+    #[serde(with = "humantime_serde", default = "default_stats_interval")]
+    pub stats_report_interval_secs: Duration,
+    /// Maximum number of times a forwarder task will attempt to restart after an error.
+    #[serde(default = "default_task_max_retries")]
+    pub task_max_retries: u32,
+    /// Delay (in seconds) between forwarder task restart attempts.
+    #[serde(with = "humantime_serde", default = "default_task_retry_delay")]
+    pub task_retry_delay_secs: Duration,
 }
 
-// --- Default implementation for TuningConfig --- 
+// Implement Default for TuningConfig
 impl Default for TuningConfig {
     fn default() -> Self {
-        Self {
-            stats_report_interval_secs: default_stats_interval(),
-            task_retry_delay_secs: default_task_retry_delay(),
-            task_max_retries: default_task_max_retries(),
+        TuningConfig {
             channel_buffer_size: default_channel_buffer_size(),
+            max_consecutive_nats_errors: default_max_consecutive_nats_errors(),
+            stats_report_interval_secs: default_stats_interval(),
+            task_max_retries: default_task_max_retries(),
+            task_retry_delay_secs: default_task_retry_delay(),
         }
     }
 }
