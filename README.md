@@ -112,9 +112,10 @@ forward_mappings:
         - pattern: "."
           replacement: "-"
 
-  # --- Add more mappings as needed --- 
-
-```
+# Optional Prometheus exporter configuration
+prometheus:
+  enabled: true                 # Set to true to enable the exporter
+  listen_address: "0.0.0.0:9090" # Address and port to listen on
 
 **Topic/Subject Mapping Details:**
 
@@ -132,6 +133,31 @@ forward_mappings:
   - `data.api.Bar/30s/CZCE/SH601` -> `zmq.line1.pb.data-api-Bar.30s.CZCE.SH601`
   - `data.api.Tick/SHSE/688176` -> `zmq.line1.pb.data-api-tick.SHSE.688176`
 
+## Prometheus Exporter
+
+The application can optionally expose metrics in Prometheus format.
+
+**Configuration:**
+
+Enable and configure the exporter in your `config.yaml` under the `prometheus` section:
+
+```yaml
+prometheus:
+  enabled: true                 # Set to true to enable the exporter
+  listen_address: "0.0.0.0:9090" # Address and port to listen on
+```
+
+*   `enabled`: Set to `true` to activate the exporter.
+*   `listen_address`: The IP address and port where the metrics server will listen. `0.0.0.0` allows connections from any network interface.
+
+**Accessing Metrics:**
+
+Once the bridge is running with the exporter enabled, metrics will be available at `http://<bridge_ip>:<listen_port>/metrics`. For example, if running locally, it might be `http://localhost:9090/metrics` or if running in Docker (as shown in the Docker section), `http://<docker_host_ip>:9090/metrics`.
+
+**Docker Port Mapping:**
+
+Remember to map the `listen_address` port when running in Docker if you want to access the metrics endpoint from outside the container (e.g., using `-p 9090:9090` in the `docker run` command if the `listen_address` is `0.0.0.0:9090`).
+
 ## Building and Running
 
 1.  **Build:**
@@ -147,13 +173,45 @@ forward_mappings:
     ```
     (Or omit `--config` if using the default `config.yaml` path).
 
+## Docker Support
+
+This project includes a `Dockerfile` for building and running the application in a container.
+
+1.  **Build the Docker Image:**
+    Make sure you have Docker installed and running. Navigate to the project root directory and run:
+    ```bash
+    docker build -t zmq-nats-bridge .
+    ```
+    This command builds the image using a multi-stage process to keep the final image size small and tags it as `zmq-nats-bridge`.
+
+2.  **Run the Docker Container:**
+
+    *   **Using the embedded config:**
+        The `Dockerfile` copies the `config.yaml` from the build context into the image at `/app/config.yaml`. To run using this configuration:
+        ```bash
+        # Exposes the Prometheus port 9090 (if enabled in config.yaml)
+        docker run --rm -p 9090:9090 zmq-nats-bridge
+        ```
+        The `--rm` flag automatically removes the container when it exits.
+
+    *   **Mounting a local config:**
+        For more flexibility, especially during development or for different environments, you can mount your local `config.yaml` file into the container, overriding the one in the image:
+        ```bash
+        docker run --rm -p 9090:9090 -v "$(pwd)/config.yaml":/app/config.yaml zmq-nats-bridge
+        ```
+        *(Note: Use `%cd%` instead of `$(pwd)` on Windows Command Prompt/PowerShell)*
+
+    *   **Specifying a Network:**
+        If your NATS server or ZMQ endpoints are running in other Docker containers, you might need to connect the bridge container to the same Docker network:
+        ```bash
+        # Create a network if you don't have one
+        # docker network create my-network
+
+        # Run the bridge on the specified network
+        docker run --rm -p 9090:9090 --network my-network -v "$(pwd)/config.yaml":/app/config.yaml zmq-nats-bridge
+        ```
+        Replace `my-network` with the name of your actual Docker network.
+
 ## Development
 
 *   **Testing:** `cargo test`
-*   **Linting:** `cargo clippy`
-*   **Formatting:** `cargo fmt`
-
-
-## TODOs
-
-- [x] if upstream zmq restarts, cannot receive message unless this service also restart.

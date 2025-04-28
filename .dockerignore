@@ -1,0 +1,21 @@
+# Ignore build artifacts
+target/
+
+# Ignore Git files
+.git/
+.gitignore
+
+# Ignore environment files
+.env*
+
+# Ignore log files
+*.log
+logs/
+
+# Ignore editor configuration
+.vscode/
+.idea/
+
+# Ignore docker specific files
+Dockerfile
+.dockerignore 
