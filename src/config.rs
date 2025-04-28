@@ -16,6 +16,8 @@ fn default_file_level() -> String { "debug".to_string() }
 fn default_log_path() -> PathBuf { PathBuf::from("logs/zmq-nats-bridge.log") }
 fn default_max_consecutive_nats_errors() -> u32 { 10 }
 fn default_nats_connect_retry_delay() -> Duration { Duration::from_secs(2) }
+fn default_prometheus_enabled() -> bool { false }
+fn default_prometheus_listen_address() -> String { "0.0.0.0:9090".to_string() }
 
 /// Tuning configuration parameters
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -55,6 +57,27 @@ impl Default for TuningConfig {
     }
 }
 
+/// Prometheus exporter configuration.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct PrometheusConfig {
+    /// Enable the Prometheus metrics exporter HTTP server.
+    #[serde(default = "default_prometheus_enabled")]
+    pub enabled: bool,
+    /// Listen address (host:port) for the Prometheus exporter.
+    #[serde(default = "default_prometheus_listen_address")]
+    pub listen_address: String,
+}
+
+impl Default for PrometheusConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_prometheus_enabled(),
+            listen_address: default_prometheus_listen_address(),
+        }
+    }
+}
+
 /// Main application configuration structure.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
@@ -67,6 +90,9 @@ pub struct Config {
     /// Global tuning parameters.
     #[serde(default)]
     pub tuning: TuningConfig,
+    /// Prometheus exporter configuration.
+    #[serde(default)]
+    pub prometheus: PrometheusConfig,
 }
 
 /// Defines a single ZMQ -> NATS forwarding pipeline.

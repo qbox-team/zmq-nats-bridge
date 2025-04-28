@@ -23,6 +23,8 @@ tracing-appender = "0.2"
 humantime = "2.1"
 dotenv = "0.15.0"
 async-channel = "2.3"
+prometheus-client = "0.23.1"
+axum = "0.8.3"
 
 [dev-dependencies]
 assert_cmd = "2.0"

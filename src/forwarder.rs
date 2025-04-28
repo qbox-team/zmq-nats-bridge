@@ -12,13 +12,7 @@ use tracing::{debug, error, info, instrument, warn, trace};
 // Use blocking zmq API from zmq = "0.10"
 use zmq::{Context, SocketType}; // Use zmq crate types
 use std::thread; // Add back std::thread
-// Remove futures-util import if no longer needed elsewhere (assuming it's not)
-// use futures_util::TryStreamExt;
-// use futures_util::future::TryFutureExt;
-
-// Constants
-// Removed NATS_CONNECT_RETRY_DELAY
-// Removed MAX_CONSECUTIVE_NATS_ERRORS
+use crate::metrics::{ForwarderLabels, ForwarderMetrics}; // Import metrics types
 
 // Message struct for the channel - simple Vecs now
 // Use Arc<[u8]> to potentially reduce copying if payload is large?
@@ -52,13 +46,14 @@ struct ZmqStats {
 
 #[instrument(
     name = "forwarder_task",
-    skip(mapping, shutdown_rx, tuning),
+    skip(mapping, shutdown_rx, tuning, metrics),
     fields(mapping_name = %mapping.name)
 )]
 pub async fn run(
     mapping: ForwardMapping,
     mut shutdown_rx: broadcast::Receiver<()>, 
     tuning: Arc<TuningConfig>,
+    metrics: Option<Arc<ForwarderMetrics>>, // Added optional metrics
 ) -> Result<()> {
     let mapping_name = &mapping.name;
     info!(mapping_name, "Starting forwarder task (Blocking ZMQ Thread).");
@@ -81,12 +76,15 @@ pub async fn run(
         let inner_tuning = Arc::clone(&tuning);
         // ForwardMapping needs to derive Clone
         let inner_mapping = mapping.clone(); 
+        // Clone metrics handle for the component run
+        let inner_metrics = metrics.clone();
 
         match run_forwarder_components(
             inner_mapping,
             inner_mapper,
             loop_shutdown_rx,
             inner_tuning,
+            inner_metrics, // Pass metrics handle down
         )
         .await
         {
@@ -125,6 +123,7 @@ async fn run_forwarder_components(
     mapper: Arc<TopicMapper>,
     shutdown_rx: broadcast::Receiver<()>, // Takes ownership
     tuning: Arc<TuningConfig>,
+    metrics: Option<Arc<ForwarderMetrics>>, // Added optional metrics
 ) -> Result<()> {
     let mapping_name = Arc::new(mapping.name.clone());
     info!(mapping_name=%mapping_name, "Initializing forwarder components (blocking ZMQ).");
@@ -140,20 +139,21 @@ async fn run_forwarder_components(
 
     // --- Spawn Dedicated Blocking ZMQ Receiver Thread --- 
     let zmq_thread_handle = {
-        // Use mapping.name directly, clone String for thread
         let thread_mapping_name = mapping.name.clone(); 
         let thread_endpoints = mapping.zmq.endpoints.clone();
         let thread_topics = mapping.zmq.topics.clone();
-        let thread_tx = tx; // ZMQ thread owns the sender end
-        // No shutdown_rx needed for the blocking thread
+        let thread_tx = tx; 
+        // Clone metrics specifically for the thread closure
+        let thread_metrics = metrics.clone(); 
 
         thread::spawn(move || { // Use std::thread::spawn
             // Run the blocking ZMQ loop
             let result = run_zmq_receiver_thread(
-                thread_mapping_name.clone(), // Clone again for logging inside
+                thread_mapping_name.clone(), 
                 thread_endpoints,
                 thread_topics,
                 thread_tx, 
+                thread_metrics, // Pass the cloned handle to the thread
             );
             // Log final thread status
             match &result { // Log based on ZmqStats result
@@ -172,6 +172,7 @@ async fn run_forwarder_components(
         rx, // Publisher owns the receiver end
         tuning,
         shutdown_rx, // Publisher owns the original shutdown receiver
+        metrics, // Pass the original (unmoved) metrics handle
     ).await;
 
     // Ensure thread handle doesn't leak if publisher exits early.
@@ -225,14 +226,17 @@ async fn connect_nats(
 // ======================================== 
 // ZMQ Receiver Thread Function (Blocking)
 // ========================================
-fn run_zmq_receiver_thread( // Changed back to fn, removed async, removed shutdown_rx
+fn run_zmq_receiver_thread(
     mapping_name: String, 
     endpoints: Vec<String>,
     topics: Vec<String>,
     tx: Sender<ForwardData>, 
+    metrics: Option<Arc<ForwarderMetrics>>, // Ensure signature matches
 ) -> Result<ZmqStats> { // Return Result<ZmqStats>
     info!(mapping_name=%mapping_name, "ZMQ receiver thread starting (blocking API).");
     let mut stats = ZmqStats::default();
+    // Create labels once for this thread
+    let maybe_labels = metrics.as_ref().map(|_| ForwarderLabels { mapping_name: mapping_name.clone() });
 
     // --- ZMQ Connection & Subscription (Blocking API from zmq = "0.10") ---
     let context = Context::new();
@@ -308,9 +312,17 @@ fn run_zmq_receiver_thread( // Changed back to fn, removed async, removed shutdo
                 match tx.try_send(data) {
                     Ok(_) => {
                         stats.success_count += 1;
+                        // Increment Prometheus counter if enabled
+                        if let (Some(m), Some(l)) = (&metrics, &maybe_labels) {
+                            m.zmq_messages_received.get_or_create(l).inc_by(1);
+                        }
                     }
                     Err(async_channel::TrySendError::Full(_dropped_data)) => {
                         stats.drop_count += 1;
+                        // Increment Prometheus counter if enabled
+                        if let (Some(m), Some(l)) = (&metrics, &maybe_labels) {
+                            m.zmq_messages_dropped.get_or_create(l).inc_by(1);
+                        }
                         if stats.drop_count == 1 || last_log_time.elapsed() > log_interval {
                             warn!(mapping_name=%mapping_name,
                                   drops = stats.drop_count,
@@ -326,6 +338,10 @@ fn run_zmq_receiver_thread( // Changed back to fn, removed async, removed shutdo
             }
             Err(e) => {
                 stats.error_count += 1;
+                // Increment Prometheus counter if enabled
+                if let (Some(m), Some(l)) = (&metrics, &maybe_labels) {
+                    m.zmq_receive_errors.get_or_create(l).inc_by(1);
+                }
                 // Check if the error is EAGAIN (non-blocking) or EINTR (interrupt), possibly continue
                 if e == zmq::Error::EAGAIN || e == zmq::Error::EINTR {
                     trace!(mapping_name=%mapping_name, error=%e, "ZMQ recv non-fatal error, continuing.");
@@ -362,9 +378,12 @@ async fn run_nats_publisher_loop(
     rx: Receiver<ForwardData>, // Receiver from async_channel
     tuning: Arc<TuningConfig>,
     mut shutdown_rx: broadcast::Receiver<()>, 
+    metrics: Option<Arc<ForwarderMetrics>>, // Added optional metrics
 ) -> Result<()> {
     info!(mapping_name=%mapping_name, "Starting NATS publisher task (async).");
-    let mut metrics = NatsMetrics::default();
+    // Create labels once for this task
+    let maybe_labels = metrics.as_ref().map(|_| ForwarderLabels { mapping_name: (*mapping_name).clone() });
+    let mut local_metrics = NatsMetrics::default(); // Make mutable
     let mut consecutive_nats_errors: u32 = 0;
     // Use tuning config value directly
     let max_consecutive_errors = tuning.max_consecutive_nats_errors; 
@@ -379,7 +398,11 @@ async fn run_nats_publisher_loop(
 
             // Branch 1: Receive message from ZMQ thread's channel
             Ok(data) = rx.recv() => { // Use Ok() pattern as recv() returns Result
-                metrics.messages_received_from_channel += 1;
+                // Increment Prometheus counter if enabled
+                if let (Some(m), Some(l)) = (&metrics, &maybe_labels) {
+                    m.nats_messages_received_from_channel.get_or_create(l).inc_by(1);
+                }
+                local_metrics.messages_received_from_channel += 1; // Update local struct too
                 let latency_since_zmq_recv = data.recv_time.elapsed();
                 
                 // Extract topic and payload from Vec<Vec<u8>>
@@ -404,15 +427,23 @@ async fn run_nats_publisher_loop(
                     match publish_result {
                         Ok(_) => {
                             consecutive_nats_errors = 0;
-                            metrics.messages_forwarded_to_nats += 1;
+                            // Increment Prometheus counter if enabled
+                            if let (Some(m), Some(l)) = (&metrics, &maybe_labels) {
+                                m.nats_messages_published.get_or_create(l).inc_by(1);
+                            }
+                            local_metrics.messages_forwarded_to_nats += 1; // Update local struct
                             trace!(mapping_name=%mapping_name, zmq_topic = %topic_str, nats_subject = %subject, ?latency_since_zmq_recv, ?publish_duration, "Message forwarded");
                         }
                         Err(e) => {
                             consecutive_nats_errors += 1;
-                            metrics.nats_publish_errors += 1;
+                            // Increment Prometheus counter if enabled
+                            if let (Some(m), Some(l)) = (&metrics, &maybe_labels) {
+                                m.nats_publish_errors.get_or_create(l).inc_by(1);
+                            }
+                            local_metrics.nats_publish_errors += 1; // Update local struct
                             let error_string = e.to_string();
-                            metrics.last_nats_error = Some(error_string.clone());
-                            metrics.last_nats_error_time = Some(Instant::now());
+                            local_metrics.last_nats_error = Some(error_string.clone());
+                            local_metrics.last_nats_error_time = Some(Instant::now());
                             error!(mapping_name=%mapping_name, error = %e, nats_subject=%subject, ?latency_since_zmq_recv, ?publish_duration, consecutive_errors = consecutive_nats_errors, "Failed to publish to NATS");
                             
                             // Check circuit breaker using tuning value
@@ -440,10 +471,10 @@ async fn run_nats_publisher_loop(
             _ = interval.tick() => {
                  info!(mapping_name=%mapping_name,
                       "NATS Pub Stats: RcvdFromChan={}, FwdToNats={}, PublishErrs={}",
-                      metrics.messages_received_from_channel, metrics.messages_forwarded_to_nats, metrics.nats_publish_errors
+                      local_metrics.messages_received_from_channel, local_metrics.messages_forwarded_to_nats, local_metrics.nats_publish_errors
                  );
-                 if let Some(err_str) = &metrics.last_nats_error {
-                      if let Some(err_time) = metrics.last_nats_error_time {
+                 if let Some(err_str) = &local_metrics.last_nats_error {
+                      if let Some(err_time) = local_metrics.last_nats_error_time {
                            debug!(mapping_name=%mapping_name, last_error = %err_str, last_error_age = ?err_time.elapsed(), "Last recorded NATS error");
                       }
                  }
