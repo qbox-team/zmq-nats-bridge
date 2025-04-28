@@ -15,6 +15,7 @@ fn default_console_level() -> String { "info".to_string() }
 fn default_file_level() -> String { "debug".to_string() }
 fn default_log_path() -> PathBuf { PathBuf::from("logs/zmq-nats-bridge.log") }
 fn default_max_consecutive_nats_errors() -> u32 { 10 }
+fn default_nats_connect_retry_delay() -> Duration { Duration::from_secs(2) }
 
 /// Tuning configuration parameters
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -35,6 +36,9 @@ pub struct TuningConfig {
     /// Delay (in seconds) between forwarder task restart attempts.
     #[serde(with = "humantime_serde", default = "default_task_retry_delay")]
     pub task_retry_delay_secs: Duration,
+    /// Delay (in seconds) between NATS connection attempts during initial connection.
+    #[serde(with = "humantime_serde", default = "default_nats_connect_retry_delay")]
+    pub nats_connect_retry_delay: Duration,
 }
 
 // Implement Default for TuningConfig
@@ -46,6 +50,7 @@ impl Default for TuningConfig {
             stats_report_interval_secs: default_stats_interval(),
             task_max_retries: default_task_max_retries(),
             task_retry_delay_secs: default_task_retry_delay(),
+            nats_connect_retry_delay: default_nats_connect_retry_delay(),
         }
     }
 }

@@ -129,3 +129,5 @@ logging:
 #   task_retry_delay_secs: "5s"       # Use string format with unit
 #   task_max_retries: 5               # Max attempts to retry a failed forwarder task
 #   channel_buffer_size: 100          # Max messages to buffer between ZMQ recv and NATS pub
+#   max_consecutive_nats_errors: 10   # Threshold for NATS publish errors before reconnect
+#   nats_connect_retry_delay: "2s"    # Delay between initial NATS connection attempts

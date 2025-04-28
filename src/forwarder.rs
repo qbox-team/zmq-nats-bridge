@@ -17,8 +17,8 @@ use std::thread; // Add back std::thread
 // use futures_util::future::TryFutureExt;
 
 // Constants
-const NATS_CONNECT_RETRY_DELAY: Duration = Duration::from_secs(2);
-const MAX_CONSECUTIVE_NATS_ERRORS: u32 = 10;
+// Removed NATS_CONNECT_RETRY_DELAY
+// Removed MAX_CONSECUTIVE_NATS_ERRORS
 
 // Message struct for the channel - simple Vecs now
 // Use Arc<[u8]> to potentially reduce copying if payload is large?
@@ -130,7 +130,7 @@ async fn run_forwarder_components(
     info!(mapping_name=%mapping_name, "Initializing forwarder components (blocking ZMQ).");
 
     // --- NATS Connection (Async) ---
-    let nats_client = connect_nats(mapping_name.as_str(), &mapping.nats, tuning.task_max_retries).await?;
+    let nats_client = connect_nats(mapping_name.as_str(), &mapping.nats, tuning.task_max_retries, &tuning).await?;
     let nats_client = Arc::new(nats_client);
 
     // --- Create Async Channel ---
@@ -188,7 +188,8 @@ async fn run_forwarder_components(
 async fn connect_nats(
     mapping_name: &str,
     config: &NatsConfig, 
-    max_connect_retries: u32
+    max_connect_retries: u32,
+    tuning: &TuningConfig, // Added tuning config reference
 ) -> Result<Client> {
     let mut attempts = 0;
     let _primary_uri = config.uris.first().ok_or_else(|| AppError::Config("No NATS URI specified".to_string()))?.as_str();
@@ -214,8 +215,8 @@ async fn connect_nats(
                     error!(mapping_name, error = %e, attempts, max_attempts = max_connect_retries, "Failed to connect to NATS after max attempts.");
                     return Err(AppError::NatsConnection(e.to_string())); 
                 }
-                error!(mapping_name, error = %e, attempt = attempts, max_attempts = max_connect_retries, delay = ?NATS_CONNECT_RETRY_DELAY, "Failed NATS connect. Retrying...");
-                tokio::time::sleep(NATS_CONNECT_RETRY_DELAY).await;
+                error!(mapping_name, error = %e, attempt = attempts, max_attempts = max_connect_retries, delay = ?tuning.nats_connect_retry_delay, "Failed NATS connect. Retrying...");
+                tokio::time::sleep(tuning.nats_connect_retry_delay).await;
             }
         }
     }
@@ -365,6 +366,8 @@ async fn run_nats_publisher_loop(
     info!(mapping_name=%mapping_name, "Starting NATS publisher task (async).");
     let mut metrics = NatsMetrics::default();
     let mut consecutive_nats_errors: u32 = 0;
+    // Use tuning config value directly
+    let max_consecutive_errors = tuning.max_consecutive_nats_errors; 
 
     let report_interval = tuning.stats_report_interval_secs;
     let mut interval = tokio::time::interval(report_interval);
@@ -412,9 +415,9 @@ async fn run_nats_publisher_loop(
                             metrics.last_nats_error_time = Some(Instant::now());
                             error!(mapping_name=%mapping_name, error = %e, nats_subject=%subject, ?latency_since_zmq_recv, ?publish_duration, consecutive_errors = consecutive_nats_errors, "Failed to publish to NATS");
                             
-                            // Check circuit breaker
-                            if consecutive_nats_errors >= MAX_CONSECUTIVE_NATS_ERRORS {
-                                 error!(mapping_name=%mapping_name, error=%e, attempts=consecutive_nats_errors, threshold=MAX_CONSECUTIVE_NATS_ERRORS, "Exceeded max consecutive NATS publish errors! Triggering reconnect.");
+                            // Check circuit breaker using tuning value
+                            if consecutive_nats_errors >= max_consecutive_errors {
+                                 error!(mapping_name=%mapping_name, error=%e, attempts=consecutive_nats_errors, threshold=max_consecutive_errors, "Exceeded max consecutive NATS publish errors! Triggering reconnect.");
                                  return Err(AppError::Forwarder(format!(
                                     "Persistent NATS publish failure after {} errors: {}", 
                                     consecutive_nats_errors, error_string

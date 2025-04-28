@@ -34,6 +34,7 @@ pub enum AppError {
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
 
+    #[allow(dead_code)]
     #[error("Shutdown signal received: {0}")]
     Shutdown(String),
 
