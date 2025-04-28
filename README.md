@@ -212,6 +212,44 @@ This project includes a `Dockerfile` for building and running the application in
         ```
         Replace `my-network` with the name of your actual Docker network.
 
+## Docker Compose
+
+A `docker-compose.yml` file is provided for easier management, especially when running alongside other services like NATS.
+
+**Prerequisites:**
+
+*   Docker Compose V2 (usually included with Docker Desktop or installable as a plugin).
+*   A `config.yaml` file in the project root.
+
+**Usage:**
+
+1.  **Customize (Optional):**
+    *   Edit `docker-compose.yml` if you need to change the mapped Prometheus port (e.g., `"9091:9090"`), container name, or network settings.
+    *   Uncomment and configure the `networks` section if you are running other services (like a NATS server) within the same Docker Compose setup and need the bridge to connect to them. Ensure the `nats.uris` in your `config.yaml` use the service name defined in `docker-compose.yml` (e.g., `nats://nats-server:4222`).
+
+2.  **Start the Service:**
+    Run the following command from the project root directory:
+    ```bash
+    docker compose up --build
+    ```
+    *   `docker compose up`: Starts the services defined in the `docker-compose.yml` file.
+    *   `--build`: Forces Docker Compose to build the image using the `Dockerfile` before starting the container. You can omit `--build` on subsequent runs if the source code and `Dockerfile` haven't changed.
+    *   Add `-d` to run in detached mode (in the background):
+        ```bash
+        docker compose up --build -d
+        ```
+
+3.  **Viewing Logs (if detached):**
+    ```bash
+    docker compose logs -f zmq-nats-bridge
+    ```
+
+4.  **Stopping the Service:**
+    ```bash
+    docker compose down
+    ```
+    This command stops and removes the containers, networks, and volumes defined in the compose file.
+
 ## Development
 
 *   **Testing:** `cargo test`

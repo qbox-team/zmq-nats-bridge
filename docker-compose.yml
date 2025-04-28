@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  zmq-nats-bridge:
+    # Build the image from the Dockerfile in the current directory (.)
+    build: .
+    container_name: zmq-nats-bridge
+    # Mount the local config.yaml into the container
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro # :ro makes it read-only
+    # Map the Prometheus port (host:container)
+    # Adjust the host port (e.g., 9091) if 9090 is already in use on your machine
+    ports:
+      - "9090:9090"
+    # Ensure the container restarts if it fails (optional)
+    restart: unless-stopped
+    # Optional: Define networks if needed to connect to other services
+    networks:
+      - qbox-net
+
+# Optional: Define a network if you run NATS or other services in the same compose file
+networks:
+  qbox-net:
+    driver: bridge 
