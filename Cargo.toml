@@ -1,22 +1,41 @@
 [package]
 name = "zmq-nats-bridge"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 async-nats = "0.40.0"
 zeromq = "0.4.1"
-bytes = "1.6.1"
-futures = "0.3"
 tokio = { version = "1.39.2", features = ["full"] }
-serde = { version = "1.0.203", features = ["derive"] }
-serde_json = "1.0"
-config = { version = "0.15.0", features = ["toml"] }
 clap = { version = "4.5.9", features = ["derive"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "time"] }
-tracing-appender = "0.2"
+serde = { version = "1.0.203", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
 humantime-serde = "1.1"
-thiserror = "2.0.12"
+regex = "1.10"
+thiserror = "1.0.56"
+bytes = "1.6.1"
+futures = "0.3"
+config = { version = "0.14.0", features = ["yaml", "json"] }
+tracing-appender = "0.2"
 humantime = "2.1"
 dotenv = "0.15.0"
+quanta = "0.10"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+
+[[bin]]
+name = "zmq-nats-bridge"
+path = "src/main.rs"
+
+[[bin]]
+name = "zmq_test_publisher"
+path = "src/bin/zmq_test_publisher.rs"
+
+[[bin]]
+name = "zmq_test_subscriber"
+path = "src/bin/zmq_test_subscriber.rs"

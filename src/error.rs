@@ -1,6 +1,5 @@
 use thiserror::Error;
 use std::path::PathBuf;
-use std::error::Error as StdError;
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -12,25 +11,37 @@ pub enum ConfigError {
 #[derive(Error, Debug)]
 pub enum AppError {
     #[error("Configuration error: {0}")]
-    Config(#[from] config::ConfigError),
+    Config(String),
+
+    #[error("Logging setup error: {0}")]
+    Logging(String),
 
     #[error("ZMQ error: {0}")]
     Zmq(#[from] zeromq::ZmqError),
 
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("Task join error: {0}")]
-    Join(#[from] tokio::task::JoinError),
+    #[error("ZMQ connection error: {0}")]
+    ZmqConnection(String),
 
     #[error("NATS error: {0}")]
-    Nats(#[from] async_nats::error::Error<async_nats::client::PublishErrorKind>),
+    Nats(#[from] async_nats::Error),
 
-    #[error("Other error: {0}")]
-    Other(#[from] Box<dyn StdError + Send + Sync>),
+    #[error("NATS connection error: {0}")]
+    NatsConnection(String),
 
     #[error("Forwarder error: {0}")]
     Forwarder(String),
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Regex error: {0}")]
+    Regex(#[from] regex::Error),
+
+    #[error("Shutdown signal received: {0}")]
+    Shutdown(String),
+
+    #[error("Task execution error: {0}")]
+    TaskJoin(#[from] tokio::task::JoinError),
 }
 
 #[derive(Error, Debug)]
@@ -52,7 +63,8 @@ pub enum LoggingError {
     InitializationError(String),
 }
 
-// Define a type alias for convenience
-pub type Result<T> = std::result::Result<T, AppError>;
+// Define a unified Result type for the application
+pub type Result<T, E = AppError> = std::result::Result<T, E>;
+
 #[allow(dead_code)]
 pub type LoggingResult<T> = std::result::Result<T, LoggingError>; 

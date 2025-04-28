@@ -2,21 +2,36 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::path::PathBuf;
 use humantime_serde;
+use config::{Config as ConfigCrate, ConfigError, File};
 
 // --- Default value functions for TuningConfig ---
-fn default_stats_interval() -> u64 { 60 }
-fn default_task_retry_delay() -> u64 { 5 }
+fn default_stats_interval() -> Duration { Duration::from_secs(60) }
+fn default_task_retry_delay() -> Duration { Duration::from_secs(5) }
 fn default_task_max_retries() -> u32 { 5 }
+fn default_channel_buffer_size() -> usize { 100 }
+fn default_true() -> bool { true }
+fn default_false() -> bool { false }
+fn default_console_level() -> String { "info".to_string() }
+fn default_file_level() -> String { "debug".to_string() }
+fn default_log_path() -> PathBuf { PathBuf::from("logs/zmq-nats-bridge.log") }
 
-// --- Internal Tuning Parameters --- 
+/// Tuning parameters for task behavior and performance.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TuningConfig {
+    /// Interval (seconds) for logging periodic forwarder stats.
+    #[serde(with = "humantime_serde")]
     #[serde(default = "default_stats_interval")]
-    pub stats_report_interval_secs: u64,
+    pub stats_report_interval_secs: Duration,
+    /// Delay (seconds) between retrying a failed forwarder task.
+    #[serde(with = "humantime_serde")]
     #[serde(default = "default_task_retry_delay")]
-    pub task_retry_delay_secs: u64, 
+    pub task_retry_delay_secs: Duration,
+    /// Max attempts to retry a failed forwarder task connection loop.
     #[serde(default = "default_task_max_retries")]
     pub task_max_retries: u32,
+    /// Max messages to buffer in the internal channel between ZMQ recv and NATS pub.
+    #[serde(default = "default_channel_buffer_size")]
+    pub channel_buffer_size: usize,
 }
 
 // --- Default implementation for TuningConfig --- 
@@ -26,30 +41,42 @@ impl Default for TuningConfig {
             stats_report_interval_secs: default_stats_interval(),
             task_retry_delay_secs: default_task_retry_delay(),
             task_max_retries: default_task_max_retries(),
+            channel_buffer_size: default_channel_buffer_size(),
         }
     }
 }
 
-// --- Main Configuration --- 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+/// Main application configuration structure.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
+    /// List of ZMQ -> NATS forwarding pipelines.
     #[serde(default)]
     pub forward_mappings: Vec<ForwardMapping>,
+    /// Logging configuration (console, file).
     #[serde(default)]
     pub logging: LoggingConfig,
-    #[serde(default)] // Use default TuningConfig if section is missing
+    /// Global tuning parameters.
+    #[serde(default)]
     pub tuning: TuningConfig,
 }
 
+/// Defines a single ZMQ -> NATS forwarding pipeline.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ForwardMapping {
+    /// Unique name for this mapping (used in logs).
     pub name: String,
-    #[allow(dead_code)]
+    /// Optional description.
+    #[serde(default)]
     pub desc: Option<String>,
+    /// Whether this mapping is active.
     #[serde(default = "default_true")]
     pub enable: bool,
+    /// ZMQ subscriber configuration.
     pub zmq: ZmqConfig,
+    /// NATS publisher configuration.
     pub nats: NatsConfig,
+    /// Rules for transforming ZMQ topics to NATS subjects.
+    #[serde(default)]
     pub topic_mapping: TopicMapping,
 }
 
@@ -89,10 +116,13 @@ pub struct TopicTransform {
     pub replacement: String,
 }
 
+/// Logging configuration settings.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct LoggingConfig {
+    /// Console (stdout) logging settings.
     #[serde(default)]
     pub console: ConsoleLogging,
+    /// File logging settings.
     #[serde(default)]
     pub file: FileLogging,
 }
@@ -115,38 +145,17 @@ pub struct FileLogging {
     pub level: String,
     #[serde(default = "default_log_path")]
     pub path: PathBuf,
-    #[allow(dead_code)]
+    #[serde(default = "default_true")]
     pub append: bool,
 }
 
-// Default value functions
-fn default_true() -> bool {
-    true
-}
-
-fn default_false() -> bool {
-    false
-}
-
-fn default_console_level() -> String {
-    "info".to_string()
-}
-
-fn default_file_level() -> String {
-    "debug".to_string()
-}
-
-fn default_log_path() -> PathBuf {
-    PathBuf::from("logs/zmq-nats-bridge.log")
-}
-
-// Restore Default impls
+// Manually implement Default for Logging sub-structs
 impl Default for ConsoleLogging {
     fn default() -> Self {
         Self {
-            enabled: true,
-            level: "info".to_string(),
-            colors: true,
+            enabled: default_true(),
+            level: default_console_level(),
+            colors: default_true(),
         }
     }
 }
@@ -154,33 +163,49 @@ impl Default for ConsoleLogging {
 impl Default for FileLogging {
     fn default() -> Self {
         Self {
-            enabled: false,
-            level: "debug".to_string(),
-            path: PathBuf::from("logs/zmq-nats-bridge.log"),
-            append: true,
+            enabled: default_false(),
+            level: default_file_level(),
+            path: default_log_path(),
+            append: default_true(),
         }
     }
 }
 
-// Public function to load configuration
-pub fn load_config(path: &str) -> Result<Config, config::ConfigError> {
-    let settings = config::Config::builder()
-        // Add the YAML file as a source
-        .add_source(config::File::with_name(path))
+// --- Config Loading Function (Using config crate) ---
+pub fn load_config(path: &str) -> Result<Config, ConfigError> {
+    let settings = ConfigCrate::builder()
+        .add_source(File::with_name(path))
         .build()?;
 
-    // Deserialize the configuration into our Config structure
     let config: Config = settings.try_deserialize()?;
-    
+    validate_config(&config)?;
     Ok(config)
 }
 
-// Backward compatibility for code that might use Config::load
-impl Config {
-    #[allow(dead_code)]
-    pub fn load(path: &str) -> Result<Self, config::ConfigError> {
-        load_config(path)
+// --- Helper Functions ---
+
+/// Performs basic validation checks on the loaded configuration.
+fn validate_config(config: &Config) -> Result<(), ConfigError> {
+    if config.forward_mappings.is_empty() {
+         tracing::warn!("Configuration loaded, but no forward_mappings are defined.");
     }
+    for mapping in &config.forward_mappings {
+        if mapping.enable {
+            if mapping.zmq.endpoints.is_empty() {
+                return Err(ConfigError::Message(format!(
+                    "Enabled forward_mapping '{}' has no ZMQ endpoints defined.",
+                    mapping.name
+                )));
+            }
+            if mapping.nats.uris.is_empty() {
+                return Err(ConfigError::Message(format!(
+                    "Enabled forward_mapping '{}' has no NATS URIs defined.",
+                    mapping.name
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -189,9 +214,24 @@ mod tests {
 
     #[test]
     fn test_config_loading() {
-        // This test will only pass if config.yaml exists
-        if let Ok(config) = Config::load("config.yaml") {
-            assert!(!config.forward_mappings.is_empty());
+        // Create a dummy config file for testing if config.yaml doesn't exist
+        // For now, assume config.yaml might exist for a basic check
+        let config_path = "config.yaml";
+        if std::path::Path::new(config_path).exists() {
+             match load_config(config_path) {
+                Ok(config) => {
+                    // Basic assertion: if mappings exist, the first one should have a name
+                    if !config.forward_mappings.is_empty() {
+                         assert!(!config.forward_mappings[0].name.is_empty());
+                    }
+                    // Add more specific tests based on expected config content
+                }
+                Err(e) => {
+                     panic!("Failed to load test config '{}': {}", config_path, e);
+                }
+             }
+        } else {
+             println!("Skipping config loading test: '{}' not found.", config_path);
         }
     }
-} 
+}

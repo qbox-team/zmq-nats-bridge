@@ -1,8 +1,8 @@
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{error, info, debug};
-use std::time::Duration;
+use tracing::{error, info, debug, warn};
+use tokio::signal;
 
 mod config;
 mod error;
@@ -13,9 +13,10 @@ mod topic_mapping;
 use config::load_config;
 use error::{AppError, Result};
 use logging::setup_logging;
-use topic_mapping::TopicMapper;
+// Remove TopicMapper import if it's no longer created globally
+// use topic_mapping::TopicMapper;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to the configuration file
@@ -25,103 +26,80 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse command line arguments
     let args = Args::parse();
 
-    // Load configuration
+    // Load configuration using the updated function
     let config = load_config(&args.config)
-        .map_err(|e| AppError::Config(e))?;
-        
-    // Setup logging
-    setup_logging(&config.logging)?;
-    
-    // Log information about loaded configuration
-    info!("Loaded configuration from {}", args.config);
-    info!("Starting with {} forward mappings", config.forward_mappings.len());
-    
-    // Debug log for entire configuration content 
-    debug!("Complete configuration content:");
-    debug!("-------------------------------------------");
-    if let Ok(config_str) = serde_json::to_string_pretty(&config) {
-        // Split by newlines and log each line separately for better formatting
-        for line in config_str.lines() {
-            debug!("{}", line);
-        }
-    } else {
-        debug!("Failed to serialize configuration for debug logging");
-    }
-    debug!("-------------------------------------------");
+        // Convert ConfigError to AppError::Config(String)
+        .map_err(|e| AppError::Config(e.to_string()))?;
 
-    // Create a channel for graceful shutdown
-    let (shutdown_tx, _) = broadcast::channel(1);
+    // Setup logging (using config values)
+    setup_logging(&config.logging).map_err(|e| AppError::Logging(e.to_string()))?; // Assuming setup_logging returns a specific error type
 
-    // Process each forward mapping
-    let mut handles = Vec::new();
-    // Extract tuning parameters once
-    let stats_interval = Duration::from_secs(config.tuning.stats_report_interval_secs);
-    let retry_delay = Duration::from_secs(config.tuning.task_retry_delay_secs);
-    let max_retries = config.tuning.task_max_retries;
+    info!("Configuration loaded from {}", args.config);
+    debug!("Loaded config: {:?}", config);
 
-    for mapping in config.forward_mappings {
-        if !mapping.enable {
-            info!("Skipping disabled mapping: {}", mapping.name);
-            continue;
-        }
+    // Create shutdown channel
+    let (shutdown_tx, _) = broadcast::channel::<()>(1); // Underscore indicates rx is unused here
 
-        info!("Starting forward mapping: {}", mapping.name);
-        
-        let mapper = Arc::new(TopicMapper::new(&mapping.topic_mapping));
+    // Remove global TopicMapper creation
+    // let mapper = Arc::new(
+    //     TopicMapper::new(&config.topic_mapping_rules) 
+    //         .map_err(|e| AppError::TopicMapping(e.to_string()))?, 
+    // );
+
+    // Spawn forwarder tasks based on configuration
+    let mut tasks = Vec::new();
+    // Clone Arc for task spawning loop
+    let tuning_config = Arc::new(config.tuning.clone()); 
+
+    for mapping in config.forward_mappings.iter().filter(|m| m.enable) {
+        info!("Starting forwarder task for mapping: {}", mapping.name);
+        let mapping = mapping.clone(); // Clone mapping for the task
+        // Do not clone or pass the global mapper
+        // let mapper = Arc::clone(&mapper);
         let shutdown_rx = shutdown_tx.subscribe();
-        let task_mapping = mapping.clone();
+        // Clone Arc<TuningConfig> for each task
+        let task_tuning = Arc::clone(&tuning_config); 
 
-        // Pass tuning parameters to the forwarder task
-        let handle = tokio::spawn(async move {
-            if let Err(e) = forwarder::run(
-                task_mapping, 
-                mapper, 
-                shutdown_rx, 
-                stats_interval, 
-                retry_delay, 
-                max_retries
-            ).await {
-                error!("Error in mapping {}: {}", mapping.name, e);
-            }
+        let task = tokio::spawn(async move {
+            // Pass mapping, shutdown_rx, task_tuning. 
+            // forwarder::run will need to create its own mapper internally.
+            forwarder::run(mapping, shutdown_rx, task_tuning).await 
         });
-
-        handles.push(handle);
+        tasks.push(task);
     }
 
-    // Wait for Ctrl+C signal
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            info!("Ctrl+C received, initiating graceful shutdown...");
+    if tasks.is_empty() {
+        warn!("No enabled forward mappings found in configuration. Exiting.");
+        return Ok(());
+    }
+
+    info!("{} forwarder tasks started. Waiting for shutdown signal (Ctrl+C)...", tasks.len());
+
+    // Wait for shutdown signal (Ctrl+C)
+    match signal::ctrl_c().await {
+        Ok(()) => {
+            info!("Shutdown signal received.");
+        }
+        Err(err) => {
+            error!(error = %err, "Failed to listen for shutdown signal");
         }
     }
-    
-    // Send shutdown signal to all tasks
-    info!("Sending shutdown signal to all tasks...");
+
+    info!("Sending shutdown signal to tasks...");
+    // Send shutdown signal, ignore errors (tasks might have already stopped)
     let _ = shutdown_tx.send(());
 
-    // Wait for all tasks to complete with a timeout
-    info!("Waiting for tasks to complete (timeout: 5s)..." );
-    let timeout = tokio::time::sleep(tokio::time::Duration::from_secs(5));
-    tokio::select! {
-        _ = async {
-            for handle in handles {
-                if let Err(e) = handle.await {
-                    error!("Task join error: {}", e);
-                }
-            }
-        } => {
-            info!("All tasks completed gracefully");
-        }
-        _ = timeout => {
-            error!("Timeout waiting for tasks to complete. Forcing exit (some resources may not be cleaned up)." );
-            // Force exit if tasks don't complete
-            std::process::exit(1);
+    info!("Waiting for tasks to complete...");
+    for (i, task) in tasks.into_iter().enumerate() {
+        match task.await {
+            Ok(Ok(())) => info!("Task {} completed successfully.", i),
+            Ok(Err(e)) => error!(task_index = i, error = %e, "Task {} completed with an error.", i),
+            Err(e) => error!(task_index = i, error = %e, "Task {} failed (panic or cancellation).", i),
         }
     }
 
-    info!("Exiting.");
+    info!("Shutdown complete.");
     Ok(())
 }
